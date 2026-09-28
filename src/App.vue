@@ -352,7 +352,7 @@ onBeforeUnmount(() => {
       <button type="button" role="tab" :aria-selected="ui.view === 'perform'" data-view="perform" @click="store.setUi({ view: 'perform' })">Live</button>
     </nav>
 
-    <RecordingSheet v-if="take" :take="take" @close="discardTake" />
+    <RecordingSheet v-if="take" :take="take" @close="discardTake" @listen="engine.playing && engine.stop()" />
 
     <div v-if="helpOpen" class="help" role="dialog" aria-modal="true" aria-labelledby="help-title">
       <div class="sheet">

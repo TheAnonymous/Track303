@@ -10,7 +10,7 @@ export interface Take {
 }
 
 const props = defineProps<{ take: Take }>();
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: []; listen: [] }>();
 
 const kept = ref(false);
 const shareError = ref("");
@@ -30,10 +30,10 @@ async function share(): Promise<void> {
 </script>
 
 <template>
-  <div class="help" role="dialog" aria-modal="true" aria-labelledby="take-title" data-take>
+  <div class="help take-overlay" role="dialog" aria-modal="true" aria-labelledby="take-title" data-take>
     <div class="sheet take">
       <h2 id="take-title">Aufnahme · <span data-take-length>{{ clock(take.seconds) }}</span></h2>
-      <audio controls :src="take.url" preload="metadata"></audio>
+      <audio controls :src="take.url" preload="metadata" @play="emit('listen')"></audio>
       <p class="file">{{ take.fileName }}</p>
       <div class="take-actions">
         <a class="primary" :href="take.url" :download="take.fileName" data-take-save @click="kept = true">Speichern</a>

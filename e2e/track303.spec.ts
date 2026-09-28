@@ -511,6 +511,13 @@ test("records the live play as a WAV to listen to, save or throw away", async ({
   await expect(page.locator("[data-rec-indicator]")).toHaveCount(0);
   await expect(page.locator("[data-take] audio")).toHaveAttribute("src", /^blob:/);
   await expect(page.locator("[data-take-close]")).toHaveText("Verwerfen");
+  await page.locator("[data-play]").tap();
+  await expect(page.locator("[data-play]"), "Stopp bleibt über dem Blatt erreichbar").toHaveAttribute("aria-pressed", "false");
+  await page.locator("[data-play]").tap();
+  await expect(page.locator("[data-play]")).toHaveAttribute("aria-pressed", "true");
+  await page.locator("[data-take] audio").evaluate((audio: HTMLAudioElement) => audio.play());
+  await expect(page.locator("[data-play]"), "Anhören stoppt den Loop").toHaveAttribute("aria-pressed", "false");
+  await page.locator("[data-take] audio").evaluate((audio: HTMLAudioElement) => audio.pause());
 
   const download = page.waitForEvent("download");
   await page.locator("[data-take-save]").tap();
@@ -530,7 +537,6 @@ test("records the live play as a WAV to listen to, save or throw away", async ({
   await expect(page.locator("[data-take-close]")).toHaveText("Fertig");
   await page.locator("[data-take-close]").tap();
   await expect(page.locator("[data-take]")).toHaveCount(0);
-  await page.locator("[data-play]").tap();
   expect(errors).toEqual([]);
 });
 

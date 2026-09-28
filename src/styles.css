@@ -1035,6 +1035,11 @@ main {
 
 /* Recording sheet */
 
+/* The take sheet leaves the top bar free, so Stop stays in reach. */
+.help.take-overlay {
+  top: calc(54px + env(safe-area-inset-top));
+}
+
 .take audio {
   width: 100%;
   margin: 6px 0 4px;
