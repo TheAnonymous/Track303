@@ -7,6 +7,8 @@ export interface Take {
   url: string;
   fileName: string;
   seconds: number;
+  /** "Aufnahme" for live takes, "Song" for renders. */
+  title: string;
 }
 
 const props = defineProps<{ take: Take }>();
@@ -32,7 +34,7 @@ async function share(): Promise<void> {
 <template>
   <div class="help take-overlay" role="dialog" aria-modal="true" aria-labelledby="take-title" data-take>
     <div class="sheet take">
-      <h2 id="take-title">Aufnahme · <span data-take-length>{{ clock(take.seconds) }}</span></h2>
+      <h2 id="take-title">{{ take.title }} · <span data-take-length>{{ clock(take.seconds) }}</span></h2>
       <audio controls :src="take.url" preload="metadata" @play="emit('listen')"></audio>
       <p class="file">{{ take.fileName }}</p>
       <div class="take-actions">

@@ -41,6 +41,27 @@ async function swipe(page: Page, x: number, y: number, dx: number, dy = 0): Prom
   await client.detach();
 }
 
+/** Holds a finger on one spot for `ms`, as a long press. */
+async function longPress(page: Page, x: number, y: number, ms = 650): Promise<void> {
+  const client = await page.context().newCDPSession(page);
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+  await page.waitForTimeout(ms);
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await client.detach();
+}
+
+/** A slow thumb drag that ends at rest, as when dialling in a value. */
+async function drag(page: Page, x: number, y: number, dx: number, dy: number): Promise<void> {
+  const client = await page.context().newCDPSession(page);
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+  for (let step = 1; step <= 8; step += 1) {
+    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + (dx * step) / 8, y: y + (dy * step) / 8 }] });
+    await page.waitForTimeout(16);
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await client.detach();
+}
+
 async function center(page: Page, lane: string, row: number): Promise<{ x: number; y: number }> {
   const box = (await cell(page, lane, row).boundingBox())!;
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -468,7 +489,6 @@ test("song mode plays the song list in order and 'ab hier' starts at the chosen 
 
   await page.locator("[data-mode]").tap();
   await expect(page.locator("[data-mode]")).toHaveText(/SONG/);
-  await expect(page.locator("[data-song-hint]")).toHaveText("▶ spielt den Song");
   await page.locator("[data-play]").tap();
   await expect(entries(page).nth(0)).toHaveClass(/playhead/);
   await expect(page.locator('[data-pattern="0"]')).toHaveClass(/sounding/);
@@ -587,6 +607,211 @@ test("effects: the FX column opens the effect pads, values read in words, drums 
   expect(errors).toEqual([]);
 });
 
+test("projects: new, rename, switch, save as a file, open it again, delete", async ({ page }, testInfo) => {
+  const errors = watchErrors(page);
+  await open(page);
+  const openProjects = async () => {
+    await page.locator("[data-pattern-menu]").tap();
+    await page.locator("[data-projects-open]").tap();
+    await expect(page.locator("[data-projects]")).toBeVisible();
+  };
+  await openProjects();
+  await page.locator("[data-project-name]").fill("Acid Nacht");
+  await page.locator("[data-project-name]").press("Enter");
+  await page.locator("[data-project-name]").dispatchEvent("change");
+  await page.locator('[data-project-new="empty"]').tap();
+  await expect(page.locator(".cell.on")).toHaveCount(0);
+
+  await openProjects();
+  await expect(page.locator(".project-open")).toHaveCount(2);
+  await page.locator('[data-project="Acid Nacht"]').tap();
+  await expect(cell(page, "bd", 0)).toContainText("KCK!");
+
+  await openProjects();
+  const download = page.waitForEvent("download");
+  await page.locator("[data-project-save]").tap();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe("acid-nacht.track303.json");
+  const path = testInfo.outputPath("acid-nacht.track303.json");
+  await file.saveAs(path);
+
+  await page.locator("[data-projects-close]").tap();
+  await openProjects();
+  await page.locator("[data-project-file]").setInputFiles(path);
+  await expect(page.locator(".notice")).toContainText("„Acid Nacht“ ist geöffnet");
+  await expect(cell(page, "bd", 0)).toContainText("KCK!");
+  await openProjects();
+  await expect(page.locator(".project-open")).toHaveCount(3);
+
+  await page.locator('[data-project-delete="Track 2"]').tap();
+  await expect(page.locator('[data-project-delete="Track 2"]')).toHaveText("Wirklich?");
+  await page.locator('[data-project-delete="Track 2"]').tap();
+  await expect(page.locator(".project-open")).toHaveCount(2);
+
+  await page.reload();
+  await openProjects();
+  await expect(page.locator(".project-open")).toHaveCount(2);
+  await expect(page.locator(".project-list li.active")).toContainText("Acid Nacht");
+  expect(errors).toEqual([]);
+});
+
+test("a phone call taking the sound stops playback cleanly and says so", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("./?audio-test=1");
+  await page.locator("[data-help-close]").tap();
+  await expect(page.locator("html")).toHaveAttribute("data-audio-test", "ready");
+  await page.locator("[data-play]").tap();
+  await expect(page.locator(".line.playhead")).toHaveCount(1);
+  await page.evaluate(() => window.__track303AudioTest!.interruptLiveAudio());
+  await expect(page.locator("[data-play]")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".notice")).toContainText("unterbrochen");
+  await page.locator("[data-play]").tap();
+  await expect(page.locator(".line.playhead"), "Play startet wieder").toHaveCount(1);
+  await page.locator("[data-play]").tap();
+  expect(errors).toEqual([]);
+});
+
+test("the sound page switches the 303 between saw and square", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-view="sound"]').tap();
+  await expect(page.locator('[data-waveform="sawtooth"]')).toHaveAttribute("aria-pressed", "true");
+  await page.locator('[data-waveform="square"]').tap();
+  await expect(page.locator('[data-waveform="square"]')).toHaveAttribute("aria-pressed", "true");
+  await page.locator('[data-acid-voice="venom"]').tap();
+  await expect(page.locator('[data-waveform="sawtooth"]'), "eine Stimme bringt ihre Wellenform mit").toHaveAttribute("aria-pressed", "true");
+  await page.locator('[data-acid-voice="rubber"]').tap();
+  await expect(page.locator('[data-waveform="square"]')).toHaveAttribute("aria-pressed", "true");
+  await page.reload();
+  await page.locator('[data-view="sound"]').tap();
+  await expect(page.locator('[data-waveform="square"]')).toHaveAttribute("aria-pressed", "true");
+  expect(errors).toEqual([]);
+});
+
+test("dice roll a new 303 line and new drums, and undo brings the old ones back", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  const acidText = () => page.locator('.cell[data-lane="acid"]').allInnerTexts();
+  const before = await acidText();
+  let changed = false;
+  for (let attempt = 0; attempt < 3 && !changed; attempt += 1) {
+    await page.locator("[data-pattern-menu]").tap();
+    await page.locator('[data-roll="acid"]').tap();
+    changed = JSON.stringify(await acidText()) !== JSON.stringify(before);
+  }
+  expect(changed).toBe(true);
+  await expect(cell(page, "acid", 0)).toContainText(/A-2/);
+  await expect(page.locator(".notice")).toContainText("↶");
+
+  await page.locator("[data-pattern-menu]").tap();
+  await page.locator('[data-roll="drums"]').tap();
+  for (const row of [0, 4, 8, 12]) await expect(cell(page, "bd", row)).toContainText("KCK");
+
+  await page.locator("[data-undo]").tap();
+  await page.locator("[data-undo]").tap();
+  let undone = false;
+  for (let step = 0; step < 3 && !undone; step += 1) {
+    undone = JSON.stringify(await acidText()) === JSON.stringify(before);
+    if (!undone) await page.locator("[data-undo]").tap();
+  }
+  expect(undone).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("the song renders to a WAV faster than real time", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-view="song"]').tap();
+  await page.locator("[data-song-end]").tap();
+  await page.locator('[data-song-pad="0"]').tap();
+  await expect(page.locator("[data-song-summary]")).toContainText("2 Takte");
+  const started = Date.now();
+  await page.locator("[data-song-export]").tap();
+  await expect(page.locator("[data-take] #take-title")).toContainText("Song", { timeout: 20_000 });
+  expect(Date.now() - started, "schneller als die 3,5 s Musik").toBeLessThan(10_000);
+  const download = page.waitForEvent("download");
+  await page.locator("[data-take-save]").tap();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe("mein-track-song.wav");
+  const path = testInfo.outputPath("song.wav");
+  await file.saveAs(path);
+  const { readFile } = await import("node:fs/promises");
+  const wav = await readFile(path);
+  const seconds = wav.readUInt32LE(40) / (wav.readUInt32LE(24) * 4);
+  // Two bars at 136 BPM are 3.53 s; the tail rings out a little after.
+  expect(seconds).toBeGreaterThan(3.5);
+  expect(seconds).toBeLessThan(7);
+  let peak = 0;
+  for (let offset = 44; offset < wav.length; offset += 2) peak = Math.max(peak, Math.abs(wav.readInt16LE(offset)));
+  expect(peak).toBeGreaterThan(4_000);
+  expect(peak).toBeLessThan(32_767);
+  await page.locator("[data-take-close]").tap();
+  expect(errors).toEqual([]);
+});
+
+test("long press marks a block: fill, copy, paste, transpose and shift it", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-pattern="1"]').tap();
+  const hat0 = await center(page, "hh", 0);
+  await longPress(page, hat0.x, hat0.y);
+  await expect(page.locator(".selection-bar")).toBeVisible();
+  await expect(page.locator("[data-selection-summary]")).toContainText("HH · Zeile 00–00");
+  await cell(page, "hh", 15).tap();
+  await expect(page.locator(".selection-bar")).toContainText("16 Zeilen");
+  await expect(page.locator(".cell.selected")).toHaveCount(16);
+  await page.locator('[data-block="fill"]').tap();
+  await page.locator('[data-fill="2"]').tap();
+  await expect(page.locator('.cell[data-lane="hh"].on')).toHaveCount(8);
+  await expect(cell(page, "hh", 2)).toContainText("CHH");
+  await expect(cell(page, "hh", 1)).toContainText("···");
+
+  await page.locator('[data-block="copy"]').tap();
+  await page.locator('[data-block="done"]').tap();
+  await expect(page.locator(".selection-bar")).toHaveCount(0);
+  await page.locator('[data-pattern="2"]').tap();
+  const target = await center(page, "hh", 0);
+  await longPress(page, target.x, target.y);
+  await page.locator('[data-block="paste"]').tap();
+  await expect(page.locator('.cell[data-lane="hh"].on')).toHaveCount(8);
+  await page.locator('[data-block="down"]').tap();
+  await expect(cell(page, "hh", 1)).toContainText("CHH");
+  await expect(cell(page, "hh", 0)).toContainText("···");
+  await page.locator('[data-block="done"]').tap();
+
+  await page.locator('[data-pattern="0"]').tap();
+  const acid = await center(page, "acid", 0);
+  await longPress(page, acid.x, acid.y);
+  await cell(page, "acid", 3).tap();
+  await page.locator('[data-block="tone-up"]').tap();
+  await expect(cell(page, "acid", 0)).toContainText("B-2");
+  await page.locator('[data-block="octave-up"]').tap();
+  await expect(cell(page, "acid", 0)).toContainText("B-3");
+  await page.locator("[data-undo]").tap();
+  await page.locator("[data-undo]").tap();
+  await expect(cell(page, "acid", 0)).toContainText("A-2");
+  expect(errors).toEqual([]);
+});
+
+test("in the focus view a thumb drag on a note moves it through the scale", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-focus-lane="acid"]').first().tap();
+  const note = page.locator('.cell[data-lane="acid"][data-row="0"][data-column="main"]');
+  await expect(note).toContainText("A-2");
+  const box = (await note.boundingBox())!;
+  await drag(page, box.x + box.width / 2, box.y + box.height / 2, 0, -40);
+  await expect(note, "zwei Stufen höher: A → B → C").toContainText("C-3");
+  await drag(page, box.x + box.width / 2, box.y + box.height / 2, 0, 20);
+  await expect(note).toContainText("B-2");
+  await page.locator("[data-undo]").tap();
+  await expect(note).toContainText("C-3");
+  await page.locator("[data-undo]").tap();
+  await expect(note, "eine Geste, ein Schritt").toContainText("A-2");
+  expect(errors).toEqual([]);
+});
+
 test("installs as an app: manifest and icons load, and after one visit it starts offline", async ({ page, context }) => {
   const errors = watchErrors(page);
   await open(page);
@@ -651,6 +876,10 @@ test("renders the starter groove offline with every lane audible and a lean audi
   const dry = await page.evaluate(() => window.__track303AudioTest!.render(["sd"], 4));
   const echoed = await page.evaluate(() => window.__track303AudioTest!.render(["sd"], 4, {}, { fx: { sd: { type: "EC", value: 3 } } }));
   expect(echoed.activeShare, "EC3 lässt die Claps nachhallen").toBeGreaterThan(dry.activeShare * 1.5);
+  const square = await page.evaluate(() => window.__track303AudioTest!.render(["acid"], 2, { resonance: 1, drive: 1 }, { waveform: "square" }));
+  expect(square.nonFinite).toBe(0);
+  expect(square.peak, "Rechteck bleibt unter 0 dBFS").toBeLessThanOrEqual(1);
+  expect(square.peak).toBeGreaterThan(0.05);
   for (const type of ["DL", "GT", "FL", "AR"] as const) {
     const metrics = await page.evaluate((fx) => window.__track303AudioTest!.render(["acid"], 2, {}, { fx: { acid: { type: fx, value: 3 } } }), type);
     expect(metrics.nonFinite, type).toBe(0);

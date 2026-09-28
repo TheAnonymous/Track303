@@ -24,9 +24,23 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
   Arpeggio innerhalb der Zeile (Dreiklang, Quinte, Oktave). Die FX-Taste
   neben den Noten oder ein Tipp in die FX-Spalte öffnet die Effekt-Tasten.
 - **Gesten.** Tippen wählt, doppelt tippen setzt den letzten Wert der Spur,
-  nach links wischen löscht. BPM zieht man mit dem Daumen hoch oder runter.
+  nach links wischen löscht. BPM zieht man mit dem Daumen hoch oder runter. Im
+  Spurfokus transponiert ein Wisch hoch/runter auf einer Note sie in der
+  Tonleiter (bei Drums wechselt die Stimme); eine Geste ist ein
+  Rückgängig-Schritt.
+- **Bereiche.** Lange drücken markiert eine Zelle, ein Tipp auf eine zweite
+  zieht das Rechteck über Zeilen und Spuren auf. Die Leiste unten kopiert,
+  fügt ein (auch in anderen Patterns; was eine Spur nicht spielen kann, bleibt
+  weg), leert, schiebt um eine Zeile, transponiert (Ton, Oktave) und füllt:
+  jede, jede 2., jede 4., Offbeat oder euklidisch 3/8, 5/8, 7/16, jeweils mit
+  dem zuletzt geschriebenen Wert der Spur.
+- **Würfeln.** ⋯ → „303-Linie würfeln“ schreibt eine neue Linie in der Tonart
+  (eine halbtaktige Phrase und ihre Antwort, mit Akzenten, Slides und
+  Oktavsprüngen), „Drums würfeln“ neue Techno-Drums. Rückgängig holt den alten
+  Stand zurück.
 - **Klang.** Die Regler der 303 (Cutoff, Resonanz, Env Mod, Decay, Akzent,
-  Drive, Raum), drei 303-Stimmen, drei Drum-Kits, Tempo, Swing und Tonart.
+  Drive, Raum), drei 303-Stimmen mit Säge/Rechteck-Schalter, drei Drum-Kits,
+  Tempo, Swing und Tonart.
 - **Live.** Die Ansicht zum Spielen: ein großes Filter-Feld (Cutoff quer,
   Resonanz hoch), das den 303-Filter sofort und stufenlos bewegt, auch mitten in
   einer Note; Env Mod und Decay; ein DJ-Filter (Tiefpass/Hochpass), der beim
@@ -46,9 +60,19 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
   Mutes und Breaks (bis zu 10 Minuten, oben läuft die Zeit mit). Danach lässt
   sich die Aufnahme anhören, als WAV speichern oder über Android teilen.
 - **Ansichten.** Muster, Song, Klang und Live liegen unten unter dem Daumen.
-- **Speichern.** Jede Änderung landet sofort im `localStorage`, mit der
-  vorherigen Fassung als Sicherung. Rückgängig/Wiederholen gilt für die
-  laufende Sitzung.
+- **Projekte.** Beliebig viele Projekte (⋯ → Projekt): neu mit Start-Groove
+  oder leer, umbenennen, duplizieren, löschen, als `.track303.json`-Datei
+  sichern und auf einem anderen Handy wieder öffnen. Jede Änderung landet
+  sofort im `localStorage`, mit der vorherigen Fassung als Sicherung; die App
+  bittet Chrome, den Speicher dauerhaft zu behalten. Rückgängig/Wiederholen
+  gilt für die laufende Sitzung.
+- **Song als WAV.** Die Song-Ansicht rendert den ganzen Song einmal durch,
+  schneller als Echtzeit (in 2-Sekunden-Stücken wie Kittys Export), mit
+  denselben Klängen wie live.
+- **Robust am Handy.** Nimmt ein Anruf oder eine andere App den Ton weg,
+  stoppt Track303 sauber und sagt es (eine laufende Aufnahme wird bis dahin
+  gesichert). Der Playhead leuchtet, wenn eine Zeile zu hören ist: Die
+  Ausgabe-Latenz des Geräts (bei Bluetooth deutlich mehr) wird eingerechnet.
 
 ## Als App
 

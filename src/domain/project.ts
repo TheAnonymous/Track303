@@ -2,6 +2,7 @@ import type { DrumVoice } from "../sound/kitty-types";
 import type { AcidKnobs, Cell, DrumCell, Fx, Lane, NoteCell, Pattern, Project, RowCount } from "./types";
 import {
   ACID_VOICES,
+  ACID_WAVEFORMS,
   CHANCES,
   FX_VALUES,
   KITS,
@@ -19,6 +20,7 @@ import {
   ROW_COUNTS,
   SCALES,
   SCHEMA_VERSION,
+  WAVEFORMS,
 } from "./types";
 
 export const DEFAULT_KNOBS: AcidKnobs = { cutoff: 0.42, resonance: 0.62, envMod: 0.55, decay: 0.4, accent: 0.6, drive: 0.35, space: 0.25 };
@@ -62,6 +64,7 @@ export function createProject(): Project {
     scale: "minor",
     kit: "warehouse",
     acidVoice: "silverbox",
+    waveform: "sawtooth",
     knobs: { ...DEFAULT_KNOBS },
     volume: 0.85,
     patterns,
@@ -146,6 +149,7 @@ export function sanitizeProject(value: unknown): Project {
     scale: pick(source.scale, SCALES, fallback.scale),
     kit: pick(source.kit, KITS, fallback.kit),
     acidVoice: pick(source.acidVoice, ACID_VOICES, fallback.acidVoice),
+    waveform: pick(source.waveform, WAVEFORMS, ACID_WAVEFORMS[pick(source.acidVoice, ACID_VOICES, fallback.acidVoice)]),
     knobs: Object.fromEntries(Object.entries(DEFAULT_KNOBS).map(([key, value]) => [key, unit(knobs[key], value)])) as unknown as AcidKnobs,
     volume: unit(source.volume, fallback.volume),
     patterns: patterns

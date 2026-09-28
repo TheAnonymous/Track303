@@ -4,7 +4,7 @@ import type { Cell, Lane, Pattern, Project } from "../domain/types";
 import { LANES } from "../domain/types";
 import { cellCode, cellDescription, cellFlags, chanceCode, fxCode, hasDepth, LANE_LABELS, LANE_NAMES, ratchetCode, rowLabel } from "../format";
 import { horizontalSwipeGuard } from "../horizontal-swipe";
-import type { Cursor } from "../store";
+import type { Cursor, Selection } from "../store";
 
 export type Column = "main" | "accent" | "slide" | "chance" | "ratchet" | "fx";
 
@@ -16,6 +16,7 @@ const props = defineProps<{
   /** Row the music is on in this pattern, or `null` when it plays another one or is stopped. */
   playRow: number | null;
   lit: readonly Lane[];
+  selection: Selection | null;
 }>();
 
 const emit = defineEmits<{
@@ -24,11 +25,18 @@ const emit = defineEmits<{
   clear: [lane: Lane, row: number];
   toggle: [lane: Lane, row: number, column: Exclude<Column, "main">];
   focus: [lane: Lane | null];
+  /** A long press: starts marking a block. */
+  hold: [lane: Lane, row: number];
+  /** A vertical thumb drag on a note in the focus view, in steps (up is positive). */
+  nudge: [lane: Lane, row: number, steps: number, gesture: number];
 }>();
 
 const SWIPE_PX = 36;
 const TAP_SLOP_PX = 12;
 const DOUBLE_TAP_MS = 320;
+const HOLD_MS = 450;
+/** Pixels of thumb travel per scale step when dragging a note. */
+const NUDGE_PX = 18;
 /** After a touch the grid stops following the playhead for a while, so the row under the thumb stays put. */
 const FOLLOW_PAUSE_MS = 3_000;
 
@@ -67,7 +75,17 @@ function columnSet(lane: Lane, row: number, column: Column): boolean {
 
 const scroller = ref<HTMLElement | null>(null);
 const swipeGuard = horizontalSwipeGuard();
-let gesture: { id: number; x: number; y: number; lane: Lane; row: number; column: Column } | null = null;
+let gesture: { id: number; x: number; y: number; lane: Lane; row: number; column: Column; held: boolean; nudged: number | null } | null = null;
+let holdTimer: ReturnType<typeof setTimeout> | undefined;
+/** Numbers touches, so each drag is its own undo step. */
+let touches = 0;
+
+function inSelection(lane: Lane, row: number): boolean {
+  const selection = props.selection;
+  if (!selection) return false;
+  const index = LANES.indexOf(lane);
+  return index >= selection.lanes[0] && index <= selection.lanes[1] && row >= selection.rows[0] && row <= selection.rows[1];
+}
 let lastTap: { lane: Lane; row: number; at: number } | null = null;
 let touchedAt = -Infinity;
 
@@ -83,14 +101,47 @@ function down(event: PointerEvent): void {
   touchedAt = performance.now();
   if (!event.isPrimary) return;
   const hit = target(event);
-  gesture = hit ? { id: event.pointerId, x: event.clientX, y: event.clientY, ...hit } : null;
+  touches += 1;
+  gesture = hit ? { id: event.pointerId, x: event.clientX, y: event.clientY, ...hit, held: false, nudged: null } : null;
+  clearTimeout(holdTimer);
+  if (!gesture) return;
+  const pressed = gesture;
+  holdTimer = setTimeout(() => {
+    if (gesture !== pressed) return;
+    pressed.held = true;
+    lastTap = null;
+    emit("hold", pressed.lane, pressed.row);
+  }, HOLD_MS);
+}
+
+function move(event: PointerEvent): void {
+  const start = gesture;
+  if (!start || event.pointerId !== start.id || start.held) return;
+  const dx = event.clientX - start.x;
+  const dy = event.clientY - start.y;
+  if (Math.hypot(dx, dy) > TAP_SLOP_PX) clearTimeout(holdTimer);
+  // In the focus view the note column takes vertical drags as value changes (it does not scroll).
+  if (!props.focus || start.column !== "main") return;
+  if (start.nudged === null && Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) start.nudged = 0;
+  if (start.nudged === null) return;
+  const steps = Math.round(-dy / NUDGE_PX);
+  if (steps !== start.nudged) {
+    emit("nudge", start.lane, start.row, steps - start.nudged, touches);
+    start.nudged = steps;
+  }
+}
+
+function cancel(): void {
+  clearTimeout(holdTimer);
+  gesture = null;
 }
 
 function up(event: PointerEvent): void {
   touchedAt = performance.now();
+  clearTimeout(holdTimer);
   const start = gesture;
   gesture = null;
-  if (!start || event.pointerId !== start.id) return;
+  if (!start || event.pointerId !== start.id || start.held || start.nudged !== null) return;
   const dx = event.clientX - start.x;
   const dy = event.clientY - start.y;
   if (dx < -SWIPE_PX && Math.abs(dy) < Math.abs(dx) / 2) {
@@ -152,7 +203,7 @@ watch(() => props.playRow, (row) => { if (row !== null) reveal(row, false); });
       </div>
     </template>
 
-    <div ref="scroller" class="rows" @touchstart="swipeGuard.start" @touchmove="swipeGuard.move" @pointerdown="down" @pointerup="up" @pointercancel="gesture = null" @click="click">
+    <div ref="scroller" class="rows" @touchstart="swipeGuard.start" @touchmove="swipeGuard.move" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @click="click" @contextmenu.prevent>
       <div v-for="row in rows" :key="row" class="line" :class="{ beat: row % 4 === 0, playhead: row === playRow, current: row === cursor.row }" :data-row-line="row">
         <span class="rownum">{{ rowLabel(row) }}</span>
         <template v-if="!focus">
@@ -161,7 +212,7 @@ watch(() => props.playRow, (row) => { if (row !== null) reveal(row, false); });
             :key="lane"
             type="button"
             class="cell"
-            :class="[lane, { on: cellAt(lane, row), cursor: cursor.lane === lane && cursor.row === row, accent: cellAt(lane, row)?.accent }]"
+            :class="[lane, { on: cellAt(lane, row), cursor: cursor.lane === lane && cursor.row === row, accent: cellAt(lane, row)?.accent, selected: inSelection(lane, row) }]"
             :data-lane="lane"
             :data-row="row"
             :aria-label="cellDescription(lane, row, cellAt(lane, row), project)"
@@ -175,7 +226,7 @@ watch(() => props.playRow, (row) => { if (row !== null) reveal(row, false); });
             :key="column"
             type="button"
             class="cell"
-            :class="[focus, `col-${column}`, { on: cellAt(focus, row), set: columnSet(focus, row, column), cursor: cursor.lane === focus && cursor.row === row && column === 'main', accent: column === 'main' && cellAt(focus, row)?.accent }]"
+            :class="[focus, `col-${column}`, { on: cellAt(focus, row), set: columnSet(focus, row, column), cursor: cursor.lane === focus && cursor.row === row && column === 'main', accent: column === 'main' && cellAt(focus, row)?.accent, selected: inSelection(focus, row) }]"
             :data-lane="focus"
             :data-row="row"
             :data-column="column"

@@ -10,6 +10,8 @@ interface InstallPromptEvent extends Event {
 export const updateReady = shallowRef(false);
 /** Chrome offers installing the app (not yet installed, criteria met). */
 export const installable = shallowRef(false);
+/** Whether Chrome promised to keep the projects even when the phone runs low on space. */
+export const storagePersisted = shallowRef<boolean | null>(null);
 
 let installPrompt: InstallPromptEvent | null = null;
 let waiting: ServiceWorker | null = null;
@@ -21,6 +23,7 @@ let reloading = false;
  * server's modules change all the time.
  */
 export function setUpApp(): void {
+  void keepStorage();
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     installPrompt = event as InstallPromptEvent;
@@ -29,6 +32,8 @@ export function setUpApp(): void {
   window.addEventListener("appinstalled", () => {
     installPrompt = null;
     installable.value = false;
+    // Installed apps get lasting storage; ask again now.
+    void keepStorage();
   });
   if (!import.meta.env.PROD || !("serviceWorker" in navigator)) return;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
@@ -64,4 +69,19 @@ export async function install(): Promise<void> {
   installPrompt = null;
   installable.value = false;
   await prompt.prompt();
+}
+
+/**
+ * Asks Chrome to keep this site's storage (the projects) instead of clearing
+ * it when space runs low. Chrome decides silently: installed apps and sites
+ * used often get it.
+ */
+export async function keepStorage(): Promise<void> {
+  const storage = navigator.storage;
+  if (typeof storage?.persist !== "function") return;
+  try {
+    storagePersisted.value = (await storage.persisted()) || (await storage.persist());
+  } catch {
+    storagePersisted.value = false;
+  }
 }

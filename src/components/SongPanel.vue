@@ -9,8 +9,10 @@ const props = defineProps<{
   store: Track303Store;
   /** Song entry that plays, or `null`. */
   playEntry: number | null;
+  /** Render progress 0–1 while the song becomes a WAV, else `null`. */
+  exporting: number | null;
 }>();
-const emit = defineEmits<{ playFrom: [entry: number] }>();
+const emit = defineEmits<{ playFrom: [entry: number]; export: [] }>();
 
 const SWIPE_PX = 36;
 const TAP_SLOP_PX = 12;
@@ -84,7 +86,9 @@ watch(() => props.playEntry, (index) => { if (index !== null) reveal(index, fals
   <section class="song" aria-label="Song">
     <header class="song-head">
       <span data-song-summary>{{ song.length }} {{ song.length === 1 ? "Eintrag" : "Einträge" }} · {{ bars }} {{ bars === 1 ? "Takt" : "Takte" }} · {{ duration }}</span>
-      <span class="hint" data-song-hint>{{ store.ui.value.playMode === "song" ? "▶ spielt den Song" : "▶ spielt Loop" }}</span>
+      <button type="button" class="song-export" data-song-export :disabled="exporting !== null" @click="emit('export')">
+        {{ exporting === null ? "⤓ Als WAV" : `Rendert … ${Math.round(exporting * 100)} %` }}
+      </button>
     </header>
 
     <div ref="list" class="entries" @touchstart="swipeGuard.start" @touchmove="swipeGuard.move" @pointerdown="down" @pointerup="up" @pointercancel="gesture = null" @click="click">

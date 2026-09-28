@@ -1,5 +1,5 @@
 import * as Tone from "tone";
-import type { AcidKnobs, AcidVoice, Kit } from "../domain/types";
+import type { AcidKnobs, AcidVoice, Kit, Waveform } from "../domain/types";
 import type { DrumVoice } from "./kitty-types";
 import { CharacterSaturator } from "./graph";
 import { LeanFilter, SleepyOutput } from "./lean";
@@ -125,10 +125,21 @@ export function createDrumKit(preset: Kit, destination: Tone.ToneAudioNode, alwa
   };
 }
 
-export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: Tone.ToneAudioNode, alwaysAwake: boolean): Acid303 {
+/**
+ * Level against the voice's own waveform: a square carries about 4.8 dB more
+ * energy than a sawtooth at the same peak, so switching away from the
+ * preset's waveform is evened out (by ear, a little less than the full RMS).
+ */
+const WAVEFORM_TRIM: Record<Waveform, Record<Waveform, number>> = {
+  sawtooth: { sawtooth: 1, square: 0.66 },
+  square: { sawtooth: 1.45, square: 1 },
+};
+
+export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: Tone.ToneAudioNode, alwaysAwake: boolean, waveform?: Waveform): Acid303 {
   const definition = presetDefinition("acid", preset);
   const recipe = definition.synthesis;
-  const output = new Tone.Gain(definition.level);
+  const wave = waveform ?? recipe.oscillator;
+  const output = new Tone.Gain(definition.level * WAVEFORM_TRIM[recipe.oscillator][wave]);
   const sleep = new SleepyOutput(output, destination, alwaysAwake);
   const amp = new LeanEnvelope(definition.envelope).connect(output);
   const drive = new CharacterSaturator(definition.channel.saturationCurve);
@@ -148,7 +159,7 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
     exponent: 2.35,
   });
   filter.modulateFrequency(envelope);
-  const oscillator = new LeanTone(output.context, { kind: "basic", type: recipe.oscillator }, 110).start(output.context.currentTime);
+  const oscillator = new LeanTone(output.context, { kind: "basic", type: wave }, 110).start(output.context.currentTime);
   oscillator.output.connect(filter.input);
   let current = knobs;
   let sounding = false;

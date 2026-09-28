@@ -25,6 +25,8 @@ export const FX_TYPES = ["EC", "DL", "VL", "GT", "FL", "AR"] as const;
 export const FX_VALUES = [1, 2, 3] as const;
 export const KITS = ["warehouse", "steel", "rumble"] as const satisfies readonly SoundPresetMap["drums"][];
 export const ACID_VOICES = ["silverbox", "venom", "rubber"] as const satisfies readonly SoundPresetMap["acid"][];
+/** The TB-303's waveform switch. */
+export const WAVEFORMS = ["sawtooth", "square"] as const;
 
 /** Which drum voices each drum lane can play. */
 export const LANE_VOICES = {
@@ -41,6 +43,10 @@ export type Scale = (typeof SCALES)[number];
 export type Kit = (typeof KITS)[number];
 export type AcidVoice = (typeof ACID_VOICES)[number];
 export type EditStep = (typeof EDIT_STEPS)[number];
+export type Waveform = (typeof WAVEFORMS)[number];
+
+/** Each 303 voice's own waveform, which picking the voice switches to. */
+export const ACID_WAVEFORMS: Record<AcidVoice, Waveform> = { silverbox: "sawtooth", venom: "sawtooth", rubber: "square" };
 export type FxType = (typeof FX_TYPES)[number];
 export type FxValue = (typeof FX_VALUES)[number];
 
@@ -106,6 +112,7 @@ export interface Project {
   scale: Scale;
   kit: Kit;
   acidVoice: AcidVoice;
+  waveform: Waveform;
   knobs: AcidKnobs;
   volume: number;
   patterns: Pattern[];

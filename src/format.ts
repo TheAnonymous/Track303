@@ -81,10 +81,14 @@ export function rowLabel(row: number): string {
   return String(row).padStart(2, "0");
 }
 
+/** Rows the whole song plays once through. */
+export function songRows(project: Pick<Project, "song" | "patterns">): number {
+  return project.song.reduce((sum, index) => sum + (project.patterns[index]?.rows ?? 16), 0);
+}
+
 /** Song length in seconds: every entry's rows as sixteenths at the project tempo. */
 export function songSeconds(project: Pick<Project, "song" | "patterns" | "tempo">): number {
-  const rows = project.song.reduce((sum, index) => sum + (project.patterns[index]?.rows ?? 16), 0);
-  return (rows * 15) / project.tempo;
+  return (songRows(project) * 15) / project.tempo;
 }
 
 /** "1:05" */

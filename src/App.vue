@@ -2,7 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import DragValue from "./components/DragValue.vue";
 import PerformPanel from "./components/PerformPanel.vue";
+import ProjectsSheet from "./components/ProjectsSheet.vue";
 import RecordingSheet, { type Take } from "./components/RecordingSheet.vue";
+import SelectionBar from "./components/SelectionBar.vue";
 import SongPanel from "./components/SongPanel.vue";
 import SoundPanel from "./components/SoundPanel.vue";
 import ThumbEditor from "./components/ThumbEditor.vue";
@@ -14,7 +16,8 @@ import { clock } from "./format";
 import type { PlayMode } from "./sound/arrangement";
 import { TrackerEngine, type EngineStatus, type PerformanceState } from "./sound/engine";
 import { MAX_RECORDING_SECONDS } from "./sound/recorder";
-import { audibleRange, encodePcm16Wav } from "./sound/wav";
+import { renderSong } from "./sound/render";
+import { audibleRange, encodePcm16Wav, encodeWav, trimmedLength } from "./sound/wav";
 import { Track303Store } from "./store";
 import { applyUpdate, install, installable, updateReady } from "./pwa";
 import { PlaybackWakeLock } from "./wake-lock";
@@ -35,11 +38,13 @@ const playEntry = ref<number | null>(null);
 const recording = ref(false);
 const recordingSeconds = ref(0);
 const take = shallowRef<Take | null>(null);
+const exporting = ref<number | null>(null);
 let recordingTimer: ReturnType<typeof setInterval> | undefined;
 const queued = ref<number | null>(null);
 const lit = shallowRef<readonly Lane[]>([]);
 const performance = shallowRef<PerformanceState>(engine.performanceState);
 const menuOpen = ref(false);
+const projectsOpen = ref(false);
 const helpOpen = ref(!readFlag(HELP_SEEN_KEY));
 const notice = ref(store.restoredFromBackup ? "Der letzte Stand war beschädigt, die Sicherung davor ist geladen." : "");
 
@@ -47,6 +52,10 @@ const playing = computed(() => status.value === "playing");
 const visibleRow = computed(() => playingPattern.value === project.value.activePattern ? playRow.value : null);
 
 watch(project, (value) => engine.syncProject(value));
+// Another project replaces the music entirely: stop instead of playing it mid-bar.
+watch(store.activeId, () => {
+  if (engine.playing) engine.stop();
+});
 
 const stopPlayhead = engine.onPlayhead((event) => {
   playingPattern.value = event.pattern;
@@ -63,6 +72,10 @@ const stopStatus = engine.onStatus((next) => {
   wakeLock.playing = next === "playing";
   if (next === "suspended") notice.value = "Der Browser hat den Ton blockiert. Tippe noch einmal auf Play.";
   if (next === "error") notice.value = "Der Ton konnte nicht starten. Lade die Seite neu und versuche es noch einmal.";
+  if (next === "interrupted") {
+    notice.value = "Der Ton wurde unterbrochen, etwa durch einen Anruf. Tippe auf Play, um weiterzuspielen.";
+    if (recording.value) void finishRecording("Die Aufnahme endet an der Unterbrechung.");
+  }
   if (next === "playing") notice.value = "";
   if (next !== "playing") {
     playingPattern.value = null;
@@ -140,8 +153,28 @@ async function finishRecording(note = ""): Promise<void> {
   const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
   const blob = new Blob([encodePcm16Wav(pcm, range.start, range.end)], { type: "audio/wav" });
   discardTake();
-  take.value = { blob, url: URL.createObjectURL(blob), fileName: `track303-${stamp}.wav`, seconds: (range.end - range.start) / pcm.sampleRate };
+  take.value = { blob, url: URL.createObjectURL(blob), fileName: `track303-${stamp}.wav`, seconds: (range.end - range.start) / pcm.sampleRate, title: "Aufnahme" };
   if (note) notice.value = note;
+}
+
+/** Renders the song once through into a WAV, faster than real time. */
+async function exportSong(): Promise<void> {
+  if (exporting.value !== null) return;
+  if (engine.playing) engine.stop();
+  exporting.value = 0;
+  try {
+    const buffer = await renderSong(store.project.value, (fraction) => { exporting.value = fraction; });
+    const length = trimmedLength(buffer, Math.round(buffer.sampleRate * 0.5));
+    const blob = new Blob([encodeWav(buffer, length)], { type: "audio/wav" });
+    const base = store.exportProject().fileName.replace(/\.track303\.json$/, "");
+    discardTake();
+    take.value = { blob, url: URL.createObjectURL(blob), fileName: `${base}-song.wav`, seconds: length / buffer.sampleRate, title: "Song" };
+  } catch (error) {
+    console.error(error);
+    notice.value = "Der Song ließ sich nicht rendern. Versuche es noch einmal.";
+  } finally {
+    exporting.value = null;
+  }
 }
 
 function discardTake(): void {
@@ -154,12 +187,31 @@ function preview(lane: Lane, cell: Cell): void {
 }
 
 function select(lane: Lane, row: number): void {
+  // While a block is marked, a tap moves its other corner.
+  if (ui.value.selection) {
+    store.extendSelection(lane, row);
+    return;
+  }
   store.select(lane, row);
+  preview(lane, pattern.value.lanes[lane][row] ?? null);
+}
+
+function hold(lane: Lane, row: number): void {
+  navigator.vibrate?.(20);
+  store.startSelection(lane, row);
+}
+
+/** A thumb drag on a note in the focus view: moves it through the scale (a drum through its voices). */
+function nudge(lane: Lane, row: number, steps: number, gesture: number): void {
+  store.select(lane, row);
+  store.nudgeCell(lane, row, steps, gesture);
+  navigator.vibrate?.(4);
   preview(lane, pattern.value.lanes[lane][row] ?? null);
 }
 
 /** A double tap repeats the lane's last entered value, or a sensible first one. */
 function repeat(lane: Lane, row: number): void {
+  if (ui.value.selection) return;
   store.select(lane, row);
   const fallback: Record<Lane, Cell> = { bd: drum("kick"), sd: drum("clap"), hh: drum("closedHat"), acid: note(0, ui.value.octave) };
   const cell = structuredClone(ui.value.last[lane] ?? fallback[lane]);
@@ -175,6 +227,7 @@ function clear(lane: Lane, row: number): void {
 }
 
 function toggle(lane: Lane, row: number, column: Exclude<Column, "main">): void {
+  if (ui.value.selection) return;
   if (column === "fx") {
     // The effect column opens the editor's effect pads for this row.
     store.setUi({ editorMode: "fx" });
@@ -204,6 +257,14 @@ function patternAction(action: "copy" | "paste" | "clear"): void {
 function openHelp(): void {
   menuOpen.value = false;
   helpOpen.value = true;
+}
+
+/** Rolls a new 303 line or new drums for the shown pattern. */
+function roll(what: "acid" | "drums"): void {
+  if (what === "acid") store.rollAcidLine();
+  else store.rollDrums();
+  menuOpen.value = false;
+  notice.value = "Gefällt's nicht? ↶ holt den alten Stand zurück, noch einmal würfeln gibt ein neues.";
 }
 
 function closeHelp(): void {
@@ -307,6 +368,9 @@ onBeforeUnmount(() => {
     </nav>
 
     <div v-if="menuOpen" class="menu" role="menu">
+      <button type="button" role="menuitem" class="project-item" data-projects-open @click="menuOpen = false; projectsOpen = true">
+        <small>Projekt</small>{{ store.activeEntry.name }} ›
+      </button>
       <p>Pattern {{ project.activePattern + 1 }}</p>
       <div class="segmented" role="group" aria-label="Länge">
         <button v-for="rows in ROW_COUNTS" :key="rows" type="button" :aria-pressed="pattern.rows === rows" :data-rows="rows" @click="setRows(rows)">{{ rows }} Zeilen</button>
@@ -314,6 +378,8 @@ onBeforeUnmount(() => {
       <button type="button" role="menuitem" data-pattern-action="copy" @click="patternAction('copy')">Kopieren</button>
       <button type="button" role="menuitem" data-pattern-action="paste" :disabled="!store.hasClipboard.value" @click="patternAction('paste')">Einfügen</button>
       <button type="button" role="menuitem" data-pattern-action="clear" @click="patternAction('clear')">Leeren</button>
+      <button type="button" role="menuitem" data-roll="acid" @click="roll('acid')">🎲 303-Linie würfeln</button>
+      <button type="button" role="menuitem" data-roll="drums" @click="roll('drums')">🎲 Drums würfeln</button>
       <button v-if="installable" type="button" role="menuitem" class="help-item" data-install @click="menuOpen = false; install()">＋ Als App installieren</button>
       <button type="button" role="menuitem" class="help-item" data-help-open @click="openHelp">? Hilfe</button>
     </div>
@@ -333,13 +399,16 @@ onBeforeUnmount(() => {
         :focus="ui.focus"
         :play-row="visibleRow"
         :lit="lit"
+        :selection="ui.selection"
         @select="select"
+        @hold="hold"
+        @nudge="nudge"
         @repeat="repeat"
         @clear="clear"
         @toggle="toggle"
         @focus="(lane) => store.setUi({ focus: lane })"
       />
-      <SongPanel v-else-if="ui.view === 'song'" :store="store" :play-entry="playEntry" @play-from="playFrom" />
+      <SongPanel v-else-if="ui.view === 'song'" :store="store" :play-entry="playEntry" :exporting="exporting" @play-from="playFrom" @export="exportSong" />
       <SoundPanel v-else-if="ui.view === 'sound'" :store="store" />
       <PerformPanel
         v-else
@@ -354,7 +423,8 @@ onBeforeUnmount(() => {
       />
     </main>
 
-    <ThumbEditor v-if="ui.view === 'pattern'" :store="store" @entered="(cell) => preview(ui.cursor.lane, cell)" />
+    <SelectionBar v-if="ui.view === 'pattern' && ui.selection" :store="store" />
+    <ThumbEditor v-else-if="ui.view === 'pattern'" :store="store" @entered="(cell) => preview(ui.cursor.lane, cell)" />
 
     <nav class="viewbar" role="tablist" aria-label="Ansicht">
       <button type="button" role="tab" :aria-selected="ui.view === 'pattern'" data-view="pattern" @click="store.setUi({ view: 'pattern' })">Muster</button>
@@ -364,6 +434,7 @@ onBeforeUnmount(() => {
     </nav>
 
     <RecordingSheet v-if="take" :take="take" @close="discardTake" @listen="engine.playing && engine.stop()" />
+    <ProjectsSheet v-if="projectsOpen" :store="store" @close="projectsOpen = false" @notice="(text) => notice = text" />
 
     <div v-if="helpOpen" class="help" role="dialog" aria-modal="true" aria-labelledby="help-title">
       <div class="sheet">
@@ -373,6 +444,8 @@ onBeforeUnmount(() => {
           <li><b>Tippen</b> wählt eine Zeile. Die Tasten unten schreiben hinein und springen weiter.</li>
           <li><b>Doppelt tippen</b> setzt den zuletzt geschriebenen Wert der Spur.</li>
           <li><b>Nach links wischen</b> löscht.</li>
+          <li><b>Lange drücken</b> markiert: dann eine zweite Zelle antippen, um den Bereich aufzuziehen. Die Leiste unten kopiert, fügt ein, leert, schiebt, transponiert und füllt (jede 2., 4., Offbeat, euklidisch).</li>
+          <li><b>Im Spurfokus</b> eine Note hoch oder runter <b>wischen</b> transponiert sie in der Tonleiter; bei Drums wechselt die Stimme.</li>
           <li><b>Spurkopf antippen</b> zeigt alle Spalten der Spur: Akzent <code>!</code>, Slide <code>~</code>, Chance, Wiederholungen und <b>FX</b>.</li>
           <li><b>FX</b> (Taste neben den Noten oder die FX-Spalte): <code>EC</code> Echo, <code>DL</code> später, <code>VL</code> leiser, bei der 303 auch <code>GT</code> Länge, <code>FL</code> Filter-Kick und <code>AR</code> Arpeggio, jeweils in Stufe 1–3.</li>
           <li><b>BPM</b> ziehst du mit dem Daumen hoch oder runter.</li>
@@ -380,6 +453,7 @@ onBeforeUnmount(() => {
           <li><b>Klang</b> hat die Regler der 303, Kits und Tonart.</li>
           <li><b>Live</b> ist zum Spielen: Im Feld ziehst du Cutoff (quer) und Resonanz (hoch), der DJ-Filter federt zurück, Mutes schalten am nächsten Takt, <b>Break</b> halten nimmt die Kick raus, loslassen bringt den Drop. <b>REC</b> nimmt auf, was du hörst; danach kannst du es anhören, speichern oder teilen.</li>
         </ul>
+        <p><b>⋯</b> hat außerdem deine <b>Projekte</b> (neu, umbenennen, als Datei sichern und öffnen) und <b>🎲 Würfeln</b> für eine neue 303-Linie oder neue Drums. In der Song-Ansicht wird der ganze Song mit <b>⤓ Als WAV</b> zur Audiodatei.</p>
         <p>Alles wird bei jeder Änderung auf diesem Handy gespeichert. Diese Hilfe findest du wieder unter <b>⋯</b>.</p>
         <button type="button" class="primary" data-help-close @click="closeHelp">Los geht's</button>
       </div>

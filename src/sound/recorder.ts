@@ -72,6 +72,11 @@ export class MasterRecorder {
     return new Promise((resolve) => {
       this.stopping = resolve;
       node.port.postMessage("stop");
+      // A suspended context (a call took the sound) runs no worklet that could
+      // answer; keep what arrived so far instead of waiting forever.
+      setTimeout(() => {
+        if (this.stopping === resolve) this.receive({ done: true });
+      }, 800);
     });
   }
 

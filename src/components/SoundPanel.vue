@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import { ROOT_LABELS, SCALE_LABELS } from "../domain/music";
 import type { AcidKnobs, AcidVoice, Kit, Project } from "../domain/types";
-import { ACID_VOICES, KITS, MAX_SWING, MAX_TEMPO, MIN_TEMPO, ROOT_NOTES, SCALES } from "../domain/types";
+import { ACID_VOICES, ACID_WAVEFORMS, KITS, MAX_SWING, MAX_TEMPO, MIN_TEMPO, ROOT_NOTES, SCALES, WAVEFORMS } from "../domain/types";
 import { presetDefinition } from "../sound/sound-presets";
 import type { Track303Store } from "../store";
 import { versionLabel } from "../version";
@@ -36,6 +36,15 @@ function number(event: Event): number {
 }
 
 const acidLabel = (voice: AcidVoice) => presetDefinition("acid", voice).label;
+const WAVEFORM_LABELS = { sawtooth: "Säge", square: "Rechteck" } as const;
+
+/** A voice comes with its own waveform; the switch can change it afterwards. */
+function setVoice(voice: AcidVoice): void {
+  props.store.edit((draft) => {
+    draft.acidVoice = voice;
+    draft.waveform = ACID_WAVEFORMS[voice];
+  });
+}
 const kitLabel = (kit: Kit) => presetDefinition("drums", kit).label;
 </script>
 
@@ -43,7 +52,12 @@ const kitLabel = (kit: Kit) => presetDefinition("drums", kit).label;
   <section class="sound" aria-label="Klang">
     <h2>303</h2>
     <div class="segmented" role="group" aria-label="303-Stimme">
-      <button v-for="voice in ACID_VOICES" :key="voice" type="button" :aria-pressed="project.acidVoice === voice" :data-acid-voice="voice" @click="set('acidVoice', voice)">{{ acidLabel(voice) }}</button>
+      <button v-for="voice in ACID_VOICES" :key="voice" type="button" :aria-pressed="project.acidVoice === voice" :data-acid-voice="voice" @click="setVoice(voice)">{{ acidLabel(voice) }}</button>
+    </div>
+    <div class="segmented waveform" role="group" aria-label="Wellenform">
+      <button v-for="wave in WAVEFORMS" :key="wave" type="button" :aria-pressed="project.waveform === wave" :data-waveform="wave" @click="set('waveform', wave)">
+        <span aria-hidden="true">{{ wave === "sawtooth" ? "◢" : "▭" }}</span> {{ WAVEFORM_LABELS[wave] }}
+      </button>
     </div>
     <label v-for="knob in KNOBS" :key="knob.key" class="slider" :data-knob="knob.key">
       <span>{{ knob.label }}</span>

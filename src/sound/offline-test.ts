@@ -1,6 +1,6 @@
 import * as Tone from "tone";
 import { createProject } from "../domain/project";
-import type { Fx, Lane, Project } from "../domain/types";
+import type { Fx, Lane, Project, Waveform } from "../domain/types";
 import { LANES } from "../domain/types";
 import { TrackerEngine } from "./engine";
 
@@ -22,12 +22,15 @@ export interface RenderOptions {
   break?: boolean;
   /** Puts this effect on every cell of the lane. */
   fx?: Partial<Record<Lane, Fx>>;
+  waveform?: Waveform;
 }
 
 export interface Track303AudioTestApi {
   /** Renders the starter project, optionally with only some lanes, other knobs or a held break, for `seconds`. */
   render(lanes?: Lane[], seconds?: number, change?: Partial<Project["knobs"]>, perform?: RenderOptions): Promise<RenderMetrics>;
   countEngineNodes(): Promise<NodeCount>;
+  /** Takes the sound away from the live app, as a phone call would. */
+  interruptLiveAudio(): Promise<void>;
 }
 
 function metrics(buffer: Tone.ToneAudioBuffer): RenderMetrics {
@@ -64,13 +67,14 @@ function metrics(buffer: Tone.ToneAudioBuffer): RenderMetrics {
 async function render(lanes: Lane[] = [...LANES], seconds = 4, change: Partial<Project["knobs"]> = {}, perform: RenderOptions = {}): Promise<RenderMetrics> {
   const project = createProject();
   project.knobs = { ...project.knobs, ...change };
+  if (perform.waveform) project.waveform = perform.waveform;
   for (const [lane, fx] of Object.entries(perform.fx ?? {}) as [Lane, Fx][]) {
     for (const cell of project.patterns[0]!.lanes[lane]) if (cell) cell.fx = { ...fx };
   }
   // The engine lives in the offline context and is dropped with it; disposing it
   // afterwards would reach for the live context's transport.
   const buffer = await Tone.Offline(async () => {
-    const engine = new TrackerEngine(project);
+    const engine = new TrackerEngine(project, { offline: true });
     for (const lane of LANES) engine.setMuted(lane, !lanes.includes(lane));
     await engine.start();
     if (perform.break) engine.setBreak(true);
@@ -106,6 +110,10 @@ async function countEngineNodes(): Promise<NodeCount> {
 }
 
 export function installAudioTestApi(): void {
-  window.__track303AudioTest = { render, countEngineNodes };
+  window.__track303AudioTest = {
+    render,
+    countEngineNodes,
+    interruptLiveAudio: () => (Tone.getContext().rawContext as AudioContext).suspend(),
+  };
   document.documentElement.dataset.audioTest = "ready";
 }

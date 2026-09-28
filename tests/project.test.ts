@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createProject, emptyPattern, sanitizeProject, starterPattern } from "../src/domain/project";
-import { LANES, PATTERN_COUNT } from "../src/domain/types";
+import { ACID_VOICES, ACID_WAVEFORMS, LANES, PATTERN_COUNT } from "../src/domain/types";
+import { presetDefinition } from "../src/sound/sound-presets";
 
 describe("createProject", () => {
   it("starts with an acid groove in pattern 1 and seven empty patterns", () => {
@@ -83,5 +84,12 @@ describe("sanitizeProject", () => {
     expect(lanes.acid[0]).toMatchObject({ fx: { type: "AR", value: 2 } });
     expect(lanes.acid[1]).not.toHaveProperty("fx");
     expect(lanes.acid[2]).not.toHaveProperty("fx");
+  });
+
+  it("gives each 303 voice its own waveform unless the switch says otherwise", () => {
+    for (const voice of ACID_VOICES) expect(ACID_WAVEFORMS[voice]).toBe(presetDefinition("acid", voice).synthesis.oscillator);
+    expect(sanitizeProject({ acidVoice: "rubber" }).waveform).toBe("square");
+    expect(sanitizeProject({ acidVoice: "rubber", waveform: "sawtooth" }).waveform).toBe("sawtooth");
+    expect(sanitizeProject({ waveform: "triangle" }).waveform).toBe("sawtooth");
   });
 });

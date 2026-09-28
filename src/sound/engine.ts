@@ -13,7 +13,8 @@ import { safeEffectParameters } from "./sound-presets";
 
 export type { PerformanceState } from "./performance-layer";
 
-export type EngineStatus = "idle" | "starting" | "playing" | "suspended" | "error";
+/** `interrupted`: the phone took the sound away while playing (a call, another app); playback stopped. */
+export type EngineStatus = "idle" | "starting" | "playing" | "suspended" | "interrupted" | "error";
 
 export interface PlayheadEvent {
   pattern: number;
@@ -53,6 +54,7 @@ export interface Graph {
   acid303: Acid303;
   kitPreset: Project["kit"];
   acidPreset: Project["acidVoice"];
+  acidWaveform: Project["waveform"];
 }
 
 /**
@@ -88,7 +90,7 @@ export class TrackerEngine {
    * tap: phones crackle with the smallest buffers, and a tracker is programmed
    * rather than played, so a few milliseconds more latency cost nothing.
    */
-  constructor(project: Project, private readonly options: { latencyHint?: AudioContextLatencyCategory } = {}) {
+  constructor(project: Project, private readonly options: { latencyHint?: AudioContextLatencyCategory; offline?: boolean } = {}) {
     this.project = structuredClone(project);
   }
 
@@ -188,6 +190,27 @@ export class TrackerEngine {
     this.queued = null;
   }
 
+  /**
+   * Builds the graph in the current (offline) context and schedules `steps`
+   * rows of the song from its first entry at time 0, for a WAV render.
+   */
+  async scheduleOffline(steps: number): Promise<void> {
+    await this.createGraph();
+    this.mode = "song";
+    this.songStart = 0;
+    const position = startPosition(this.arrangement, this.project.activePattern);
+    this.pattern = position.pattern;
+    this.songIndex = position.songIndex;
+    this.row = 0;
+    this.step = 0;
+    let remaining = steps;
+    this.scheduleId = Tone.getTransport().scheduleRepeat((time) => {
+      if (remaining <= 0) return;
+      remaining -= 1;
+      this.tick(time);
+    }, "16n", 0);
+  }
+
   /** Records what leaves the master until `stopRecording`. */
   async startRecording(): Promise<void> {
     await this.prepare();
@@ -245,13 +268,14 @@ export class TrackerEngine {
     graph.master.fader.gain.rampTo(faderGain(project.volume), 0.05);
     if (graph.kitPreset !== project.kit) {
       graph.kit.dispose();
-      graph.kit = createDrumKit(project.kit, graph.drums.input, false);
+      graph.kit = createDrumKit(project.kit, graph.drums.input, this.alwaysAwake);
       graph.kitPreset = project.kit;
     }
-    if (graph.acidPreset !== project.acidVoice) {
+    if (graph.acidPreset !== project.acidVoice || graph.acidWaveform !== project.waveform) {
       graph.acid303.dispose();
-      graph.acid303 = createAcid303(project.acidVoice, project.knobs, graph.acid.input, false);
+      graph.acid303 = createAcid303(project.acidVoice, project.knobs, graph.acid.input, this.alwaysAwake, project.waveform);
       graph.acidPreset = project.acidVoice;
+      graph.acidWaveform = project.waveform;
     }
     graph.acid303.setKnobs(this.liveKnobs ?? project.knobs);
     applyTrackGraphParameters(graph.acid, "acid", project.acidVoice, acidMacros(project.knobs), 0.08);
@@ -285,6 +309,14 @@ export class TrackerEngine {
       this.ownContext = new Tone.Context({ latencyHint: this.options.latencyHint });
       // Importing Tone already made a default context; it never started and is closed here.
       Tone.setContext(this.ownContext, true);
+      // A call or another app can take the sound away. The clock would stand
+      // still while Play still showed "playing"; stop cleanly and say so instead.
+      (this.ownContext.rawContext as AudioContext).addEventListener("statechange", () => {
+        if (this.playing && this.ownContext?.state !== "running") {
+          this.stop();
+          this.emitStatus("interrupted");
+        }
+      });
     }
     await Tone.start();
     if (this.graph) return this.graph;
@@ -303,13 +335,33 @@ export class TrackerEngine {
       master,
       drums,
       acid,
-      kit: createDrumKit(this.project.kit, drums.input, false),
-      acid303: createAcid303(this.project.acidVoice, this.project.knobs, acid.input, false),
+      kit: createDrumKit(this.project.kit, drums.input, this.alwaysAwake),
+      acid303: createAcid303(this.project.acidVoice, this.project.knobs, acid.input, this.alwaysAwake, this.project.waveform),
       kitPreset: this.project.kit,
       acidPreset: this.project.acidVoice,
+      acidWaveform: this.project.waveform,
     };
     this.applyTiming();
     return this.graph;
+  }
+
+  /**
+   * How long sound takes from the audio clock to the ear (the device's
+   * buffers; much more over Bluetooth), so the playhead lights up when a row
+   * is heard, not when it is computed.
+   */
+  private outputDelay(): number {
+    const raw = Tone.getContext().rawContext as Partial<AudioContext>;
+    const latency = (raw.outputLatency || raw.baseLatency || 0);
+    return Number.isFinite(latency) ? Math.max(0, Math.min(0.5, latency)) : 0;
+  }
+
+  /**
+   * Offline renders keep every voice connected: idle voices sleep by a timer
+   * against the context clock, which in a render runs ahead of the audio.
+   */
+  private get alwaysAwake(): boolean {
+    return this.options.offline === true;
   }
 
   private get arrangement(): Arrangement {
@@ -332,7 +384,7 @@ export class TrackerEngine {
     if (this.step % ROWS_PER_BAR === 0) {
       const { drop, changed } = this.performance.barLine();
       if (drop) graph.master.performance.endRise(time);
-      if (changed) Tone.getDraw().schedule(() => this.emitPerformance(), time);
+      if (changed) Tone.getDraw().schedule(() => this.emitPerformance(), time + this.outputDelay());
     }
     this.step += 1;
     const triggered = LANES.filter((lane) => this.playCell(graph, pattern, lane, row, time));
@@ -345,7 +397,7 @@ export class TrackerEngine {
     const songIndex = this.songIndex;
     Tone.getDraw().schedule(() => {
       for (const listener of this.playheadListeners) listener({ pattern: current, songIndex, row, triggered });
-    }, time);
+    }, time + this.outputDelay());
     this.row += 1;
     if (this.row >= pattern.rows) {
       this.row = 0;
