@@ -54,7 +54,7 @@ button {
   touch-action: manipulation;
   border: 1px solid var(--line);
   background: var(--panel-2);
-  border-radius: 10px;
+  border-radius: 0;
   padding: 0;
   min-height: 40px;
   cursor: pointer;
@@ -131,7 +131,7 @@ main {
   width: 58px;
   height: 44px;
   border: 1px dashed var(--faint);
-  border-radius: 10px;
+  border-radius: 0;
   line-height: 1;
   cursor: ns-resize;
 }
@@ -286,7 +286,7 @@ main {
   padding: 10px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 0;
   box-shadow: 0 12px 30px rgb(0 0 0 / 0.55);
 }
 
@@ -307,10 +307,29 @@ main {
   color: var(--dim);
 }
 
+.notice.update {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #13302b;
+  color: #c9fff6;
+}
+
+.notice.update button {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 12px;
+  color: var(--acid-ink);
+  background: var(--slide);
+  border-color: var(--slide);
+  font-weight: 700;
+}
+
 .notice {
   margin: 0 8px 6px;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: 0;
   background: #3a2a10;
   color: #ffd7a1;
   font-size: 13px;
@@ -325,7 +344,7 @@ main {
   flex-direction: column;
   margin: 0 8px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 0;
   background: var(--panel);
   overflow: hidden;
 }
@@ -455,7 +474,7 @@ main {
 
 .cell {
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   background: none;
   min-height: 0;
   font-size: 15px;
@@ -591,7 +610,7 @@ main {
   display: flex;
   align-items: center;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 0;
   overflow: hidden;
   flex: 1.5 !important;
 }
@@ -658,7 +677,7 @@ main {
   overflow: hidden;
   touch-action: none;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 0;
   background:
     linear-gradient(rgb(255 255 255 / 0.04) 1px, transparent 1px) 0 0 / 100% 25%,
     linear-gradient(90deg, rgb(255 255 255 / 0.04) 1px, transparent 1px) 0 0 / 25% 100%,
@@ -733,7 +752,7 @@ main {
   height: 52px;
   touch-action: none;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 0;
   background: var(--panel);
   overflow: hidden;
   cursor: ew-resize;
@@ -939,7 +958,7 @@ main {
   margin: 0 8px;
   padding: 4px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 0;
   background: var(--panel);
   display: flex;
   flex-direction: column;
@@ -1062,7 +1081,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
+  border-radius: 0;
   font-weight: 700;
   text-decoration: none;
 }
@@ -1094,7 +1113,7 @@ main {
 .segmented {
   display: flex;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -1153,7 +1172,7 @@ input[type="range"] {
 .key select {
   flex: 1;
   height: 44px;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid var(--line);
   background: var(--panel-2);
   padding: 0 10px;
@@ -1184,7 +1203,7 @@ input[type="range"] {
   overflow-y: auto;
   background: var(--panel);
   border-top: 2px solid var(--acid);
-  border-radius: 16px 16px 0 0;
+  border-radius: 0;
   padding: 16px 18px calc(18px + env(safe-area-inset-bottom));
   font-size: 14px;
   line-height: 1.45;

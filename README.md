@@ -44,6 +44,17 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
   vorherigen Fassung als Sicherung. Rückgängig/Wiederholen gilt für die
   laufende Sitzung.
 
+## Als App
+
+Track303 lässt sich in Chrome auf Android installieren (Menü ⋯ → „Als App
+installieren“ oder Chromes eigenes Menü). Die App startet dann vom Homescreen
+im eigenen Fenster ohne Adressleiste und läuft nach dem ersten Besuch auch
+offline: Ein Service Worker (`sw-template.js`, beim Build zu `sw.js` mit der
+Dateiliste des Releases) hält Seite, Bundles und Icons auf dem Handy. Online
+kommt die Seite immer frisch vom Server; liegt eine neue Version bereit, bietet
+Track303 „Neu laden“ an. Die Sicherheitsrichtlinie der Seite muss dafür
+`manifest-src 'self'` erlauben.
+
 ## Klang
 
 Die Drum- und 303-Stimmen, die Kanalzüge und der Master stammen aus

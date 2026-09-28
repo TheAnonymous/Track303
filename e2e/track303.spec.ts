@@ -540,6 +540,35 @@ test("records the live play as a WAV to listen to, save or throw away", async ({
   expect(errors).toEqual([]);
 });
 
+test("installs as an app: manifest and icons load, and after one visit it starts offline", async ({ page, context }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  const manifestUrl = await page.locator('link[rel="manifest"]').getAttribute("href");
+  const manifest = await (await page.request.get(manifestUrl!)).json() as { start_url: string; scope: string; display: string; icons: { src: string; sizes: string; purpose: string }[] };
+  expect(manifest).toMatchObject({ start_url: "/Track303/", scope: "/Track303/", display: "standalone" });
+  expect(manifest.icons.map((icon) => `${icon.sizes} ${icon.purpose}`)).toEqual(["192x192 any", "512x512 any", "512x512 maskable"]);
+  for (const icon of manifest.icons) {
+    const response = await page.request.get(new URL(icon.src, new URL(manifestUrl!, page.url())).href);
+    expect(response.headers()["content-type"]).toBe("image/png");
+  }
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector(".play")!).borderRadius), "eckige Knöpfe").toBe("0px");
+
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 10_000 });
+  await cell(page, "acid", 1).tap();
+  await page.locator('.pad[data-degree="4"]').tap();
+  await expect(cell(page, "acid", 1)).toContainText("E-3");
+
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.locator(".grid"), "offline aus dem Speicher des Handys").toBeVisible();
+  await expect(cell(page, "acid", 1)).toContainText("E-3");
+  await page.locator("[data-play]").tap();
+  await expect(page.locator(".line.playhead")).toHaveCount(1);
+  await page.locator("[data-play]").tap();
+  await context.setOffline(false);
+  expect(errors).toEqual([]);
+});
+
 test("renders the starter groove offline with every lane audible and a lean audio graph", async ({ page }) => {
   test.setTimeout(120_000);
   const errors = watchErrors(page);

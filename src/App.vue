@@ -16,6 +16,7 @@ import { TrackerEngine, type EngineStatus, type PerformanceState } from "./sound
 import { MAX_RECORDING_SECONDS } from "./sound/recorder";
 import { audibleRange, encodePcm16Wav } from "./sound/wav";
 import { Track303Store } from "./store";
+import { applyUpdate, install, installable, updateReady } from "./pwa";
 import { PlaybackWakeLock } from "./wake-lock";
 
 const HELP_SEEN_KEY = "track303.help.seen";
@@ -308,10 +309,15 @@ onBeforeUnmount(() => {
       <button type="button" role="menuitem" data-pattern-action="copy" @click="patternAction('copy')">Kopieren</button>
       <button type="button" role="menuitem" data-pattern-action="paste" :disabled="!store.hasClipboard.value" @click="patternAction('paste')">Einfügen</button>
       <button type="button" role="menuitem" data-pattern-action="clear" @click="patternAction('clear')">Leeren</button>
+      <button v-if="installable" type="button" role="menuitem" class="help-item" data-install @click="menuOpen = false; install()">＋ Als App installieren</button>
       <button type="button" role="menuitem" class="help-item" data-help-open @click="openHelp">? Hilfe</button>
     </div>
 
     <p v-if="notice" class="notice" role="status" @click="notice = ''">{{ notice }}</p>
+    <p v-if="updateReady" class="notice update" role="status">
+      Eine neue Version ist da.
+      <button type="button" data-update-apply :disabled="playing" @click="applyUpdate">{{ playing ? "Nach dem Stopp laden" : "Neu laden" }}</button>
+    </p>
 
     <main>
       <TrackerGrid
