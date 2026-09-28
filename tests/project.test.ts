@@ -62,4 +62,11 @@ describe("sanitizeProject", () => {
     for (const lane of LANES) expect(project.patterns[0]!.lanes[lane]).toHaveLength(32);
     expect(project.patterns[1]!.rows).toBe(16);
   });
+
+  it("keeps only valid song entries, and at least one", () => {
+    expect(sanitizeProject({ song: [0, 3, 9, -1, 2.5, "1", 7] }).song).toEqual([0, 3, 7]);
+    expect(sanitizeProject({ song: [] }).song).toEqual([0]);
+    expect(sanitizeProject({}).song).toEqual([0]);
+    expect(sanitizeProject({ song: Array.from({ length: 90 }, () => 1) }).song).toHaveLength(64);
+  });
 });

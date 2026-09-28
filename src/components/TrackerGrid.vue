@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import type { Cell, Lane, Pattern, Project } from "../domain/types";
 import { LANES } from "../domain/types";
 import { cellCode, cellDescription, cellFlags, chanceCode, hasDepth, LANE_LABELS, LANE_NAMES, ratchetCode, rowLabel } from "../format";
+import { horizontalSwipeGuard } from "../horizontal-swipe";
 import type { Cursor } from "../store";
 
 export type Column = "main" | "accent" | "slide" | "chance" | "ratchet";
@@ -63,6 +64,7 @@ function columnSet(lane: Lane, row: number, column: Column): boolean {
 }
 
 const scroller = ref<HTMLElement | null>(null);
+const swipeGuard = horizontalSwipeGuard();
 let gesture: { id: number; x: number; y: number; lane: Lane; row: number; column: Column } | null = null;
 let lastTap: { lane: Lane; row: number; at: number } | null = null;
 let touchedAt = -Infinity;
@@ -148,7 +150,7 @@ watch(() => props.playRow, (row) => { if (row !== null) reveal(row, false); });
       </div>
     </template>
 
-    <div ref="scroller" class="rows" @pointerdown="down" @pointerup="up" @pointercancel="gesture = null" @click="click">
+    <div ref="scroller" class="rows" @touchstart="swipeGuard.start" @touchmove="swipeGuard.move" @pointerdown="down" @pointerup="up" @pointercancel="gesture = null" @click="click">
       <div v-for="row in rows" :key="row" class="line" :class="{ beat: row % 4 === 0, playhead: row === playRow, current: row === cursor.row }" :data-row-line="row">
         <span class="rownum">{{ rowLabel(row) }}</span>
         <template v-if="!focus">

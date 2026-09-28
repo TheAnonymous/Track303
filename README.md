@@ -29,7 +29,17 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
   Takte steigen, Loslassen bringt den Drop am nächsten Takt. Eine Geste im
   Filter-Feld ist ein Rückgängig-Schritt.
 - **Patterns.** Acht Patterns mit 16 oder 32 Zeilen. Während der Wiedergabe
-  wechselt ein angetipptes Pattern am Ende des laufenden.
+  im Loop wechselt ein angetipptes Pattern am Ende des laufenden.
+- **Song.** Die Song-Liste reiht Patterns aneinander (bis zu 64 Einträge): Die
+  Tasten 1–8 schreiben in den gewählten Eintrag oder hängen ans Ende an,
+  „wiederholen“ verdoppelt einen Eintrag, nach links wischen löscht, und
+  „ab hier“ spielt den Song vom gewählten Eintrag. Oben schaltet Play zwischen
+  **LOOP** (das gezeigte Pattern) und **SONG** (die Liste, am Ende wieder von
+  vorn) um.
+- **Aufnahme.** REC in der Live-Ansicht nimmt auf, was du hörst, samt Filter,
+  Mutes und Breaks (bis zu 10 Minuten, oben läuft die Zeit mit). Danach lässt
+  sich die Aufnahme anhören, als WAV speichern oder über Android teilen.
+- **Ansichten.** Muster, Song, Klang und Live liegen unten unter dem Daumen.
 - **Speichern.** Jede Änderung landet sofort im `localStorage`, mit der
   vorherigen Fassung als Sicherung. Rückgängig/Wiederholen gilt für die
   laufende Sitzung.

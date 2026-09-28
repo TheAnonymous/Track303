@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import type { AcidKnobs, Lane } from "../domain/types";
 import { LANES } from "../domain/types";
-import { LANE_LABELS, LANE_NAMES } from "../format";
+import { clock, LANE_LABELS, LANE_NAMES } from "../format";
 import type { PerformanceState, TrackerEngine } from "../sound/engine";
 import { ROWS_PER_BAR } from "../sound/performance-layer";
 import type { Track303Store } from "../store";
@@ -14,7 +14,10 @@ const props = defineProps<{
   /** Row of the sounding pattern, or `null` when stopped. */
   playRow: number | null;
   lit: readonly Lane[];
+  recording: boolean;
+  recordingSeconds: number;
 }>();
+const emit = defineEmits<{ record: [] }>();
 
 const KEY_STEP = 0.02;
 // The drag surfaces cancel their touches' default (`@touchstart.prevent`): pointer
@@ -245,6 +248,17 @@ const breakLabel = computed(() => {
       </button>
     </div>
 
+    <div class="performance-row">
+    <button
+      type="button"
+      class="rec"
+      :aria-pressed="recording"
+      :aria-label="recording ? 'Aufnahme beenden' : 'Aufnahme starten'"
+      data-rec
+      @click="emit('record')"
+    >
+      <strong><i aria-hidden="true"></i>REC</strong><small data-rec-time>{{ clock(recordingSeconds) }}</small>
+    </button>
     <button
       type="button"
       class="break"
@@ -261,5 +275,6 @@ const breakLabel = computed(() => {
     >
       <strong>BREAK → DROP</strong><small>{{ breakLabel }}</small>
     </button>
+    </div>
   </section>
 </template>

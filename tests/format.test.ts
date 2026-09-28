@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { drum, note } from "../src/domain/project";
-import { cellCode, cellDescription, cellFlags, chanceCode, EMPTY_CELL, hasDepth, ratchetCode, rowLabel } from "../src/format";
+import { createProject, drum, emptyPattern, note } from "../src/domain/project";
+import { cellCode, cellDescription, cellFlags, chanceCode, clock, EMPTY_CELL, hasDepth, ratchetCode, rowLabel, songSeconds, usedLanes } from "../src/format";
 
 const key = { root: "A", scale: "minor" } as const;
 
@@ -31,5 +31,23 @@ describe("cell text", () => {
     expect(cellDescription("acid", 3, note(0, 2, { accent: true, slide: true }), key)).toBe("303 Zeile 03: A-2, Akzent, Slide");
     expect(cellDescription("bd", 0, null, key)).toBe("BD Zeile 00: leer");
     expect(rowLabel(15)).toBe("15");
+  });
+});
+
+describe("song helpers", () => {
+  it("adds up the song's length from its patterns at the project tempo", () => {
+    const project = createProject();
+    project.tempo = 120;
+    project.patterns[1] = emptyPattern(32);
+    project.song = [0, 1, 0];
+    // 16 + 32 + 16 sixteenths at 120 BPM are eight seconds.
+    expect(songSeconds(project)).toBe(8);
+    expect(clock(65.9)).toBe("1:05");
+  });
+
+  it("names the lanes a pattern uses", () => {
+    const project = createProject();
+    expect(usedLanes(project.patterns[0])).toEqual(["bd", "sd", "hh", "acid"]);
+    expect(usedLanes(project.patterns[1])).toEqual([]);
   });
 });

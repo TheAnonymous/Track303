@@ -3,6 +3,8 @@ import type { DrumVoice, SoundPresetMap } from "../sound/kitty-types";
 export const SCHEMA_VERSION = 1 as const;
 export const LANES = ["bd", "sd", "hh", "acid"] as const;
 export const PATTERN_COUNT = 8;
+/** Entries in the song list: patterns in playing order. */
+export const MAX_SONG_LENGTH = 64;
 export const ROW_COUNTS = [16, 32] as const;
 export const MIN_TEMPO = 90;
 export const MAX_TEMPO = 180;
@@ -83,4 +85,6 @@ export interface Project {
   volume: number;
   patterns: Pattern[];
   activePattern: number;
+  /** The song: pattern indices in playing order, at least one. */
+  song: number[];
 }

@@ -2,13 +2,19 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import DragValue from "./components/DragValue.vue";
 import PerformPanel from "./components/PerformPanel.vue";
+import RecordingSheet, { type Take } from "./components/RecordingSheet.vue";
+import SongPanel from "./components/SongPanel.vue";
 import SoundPanel from "./components/SoundPanel.vue";
 import ThumbEditor from "./components/ThumbEditor.vue";
 import TrackerGrid, { type Column } from "./components/TrackerGrid.vue";
 import { drum, note } from "./domain/project";
 import type { Cell, Lane, RowCount } from "./domain/types";
 import { CHANCES, MAX_TEMPO, MIN_TEMPO, PATTERN_COUNT, RATCHETS, ROW_COUNTS } from "./domain/types";
+import { clock } from "./format";
+import type { PlayMode } from "./sound/arrangement";
 import { TrackerEngine, type EngineStatus, type PerformanceState } from "./sound/engine";
+import { MAX_RECORDING_SECONDS } from "./sound/recorder";
+import { audibleRange, encodePcm16Wav } from "./sound/wav";
 import { Track303Store } from "./store";
 import { PlaybackWakeLock } from "./wake-lock";
 
@@ -24,6 +30,11 @@ const pattern = computed(() => project.value.patterns[project.value.activePatter
 const status = ref<EngineStatus>("idle");
 const playingPattern = ref<number | null>(null);
 const playRow = ref<number | null>(null);
+const playEntry = ref<number | null>(null);
+const recording = ref(false);
+const recordingSeconds = ref(0);
+const take = shallowRef<Take | null>(null);
+let recordingTimer: ReturnType<typeof setInterval> | undefined;
 const queued = ref<number | null>(null);
 const lit = shallowRef<readonly Lane[]>([]);
 const performance = shallowRef<PerformanceState>(engine.performanceState);
@@ -38,6 +49,7 @@ watch(project, (value) => engine.syncProject(value));
 
 const stopPlayhead = engine.onPlayhead((event) => {
   playingPattern.value = event.pattern;
+  playEntry.value = event.songIndex;
   playRow.value = event.row;
   queued.value = engine.queuedPattern;
   lit.value = event.triggered;
@@ -53,6 +65,7 @@ const stopStatus = engine.onStatus((next) => {
   if (next === "playing") notice.value = "";
   if (next !== "playing") {
     playingPattern.value = null;
+    playEntry.value = null;
     playRow.value = null;
     queued.value = null;
     lit.value = [];
@@ -60,8 +73,27 @@ const stopStatus = engine.onStatus((next) => {
 });
 
 async function togglePlay(): Promise<void> {
+  if (engine.playing) {
+    engine.stop();
+    return;
+  }
+  engine.setArrangement(ui.value.playMode, 0);
+  await engine.start().catch((error: unknown) => console.error(error));
+}
+
+/** Plays the song from one entry on, restarting if something already plays. */
+async function playFrom(entry: number): Promise<void> {
+  store.setUi({ playMode: "song" });
   if (engine.playing) engine.stop();
-  else await engine.start().catch((error: unknown) => console.error(error));
+  engine.setArrangement("song", entry);
+  await engine.start().catch((error: unknown) => console.error(error));
+}
+
+/** Loop plays the shown pattern, song the song list; while playing the switch waits for the pattern's end. */
+function setPlayMode(mode: PlayMode): void {
+  store.setUi({ playMode: mode });
+  engine.setArrangement(mode, 0);
+  queued.value = engine.queuedPattern;
 }
 
 function choosePattern(index: number): void {
@@ -70,6 +102,50 @@ function choosePattern(index: number): void {
     engine.queuePattern(index);
     queued.value = engine.queuedPattern;
   }
+}
+
+async function toggleRecording(): Promise<void> {
+  if (recording.value) {
+    await finishRecording();
+    return;
+  }
+  try {
+    await engine.startRecording();
+  } catch (error) {
+    console.error(error);
+    notice.value = "Die Aufnahme konnte nicht starten. Tippe einmal auf Play und versuche es noch einmal.";
+    return;
+  }
+  recording.value = true;
+  recordingSeconds.value = 0;
+  recordingTimer = setInterval(() => {
+    recordingSeconds.value = engine.recordingSeconds;
+    if (recordingSeconds.value >= MAX_RECORDING_SECONDS) void finishRecording("Nach 10 Minuten automatisch beendet.");
+  }, 250);
+}
+
+async function finishRecording(note = ""): Promise<void> {
+  if (!recording.value) return;
+  recording.value = false;
+  clearInterval(recordingTimer);
+  const pcm = await engine.stopRecording();
+  recordingSeconds.value = 0;
+  const range = audibleRange(pcm);
+  if (!range) {
+    notice.value = "Die Aufnahme war still. Starte die Musik und nimm noch einmal auf.";
+    return;
+  }
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+  const blob = new Blob([encodePcm16Wav(pcm, range.start, range.end)], { type: "audio/wav" });
+  discardTake();
+  take.value = { blob, url: URL.createObjectURL(blob), fileName: `track303-${stamp}.wav`, seconds: (range.end - range.start) / pcm.sampleRate };
+  if (note) notice.value = note;
+}
+
+function discardTake(): void {
+  if (take.value) URL.revokeObjectURL(take.value.url);
+  take.value = null;
 }
 
 function preview(lane: Lane, cell: Cell): void {
@@ -170,6 +246,8 @@ function writeFlag(key: string): void {
 onMounted(() => window.addEventListener("keydown", keydown));
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", keydown);
+  clearInterval(recordingTimer);
+  discardTake();
   stopPlayhead();
   stopPerformance();
   stopStatus();
@@ -186,14 +264,23 @@ onBeforeUnmount(() => {
         <span class="sr">{{ playing ? "Stopp" : "Play" }}</span>
       </button>
       <DragValue :value="project.tempo" :min="MIN_TEMPO" :max="MAX_TEMPO" label="BPM" @change="(tempo) => store.edit((draft) => { draft.tempo = tempo; }, 'tempo')" />
+      <button
+        type="button"
+        class="mode"
+        :class="`is-${ui.playMode}`"
+        :aria-pressed="ui.playMode === 'song'"
+        :aria-label="ui.playMode === 'song' ? 'Spielt den Song; umschalten auf Loop' : 'Spielt das Pattern im Loop; umschalten auf Song'"
+        data-mode
+        @click="setPlayMode(ui.playMode === 'song' ? 'loop' : 'song')"
+      >
+        <small>Play</small>{{ ui.playMode === "song" ? "SONG" : "LOOP" }}
+      </button>
+      <button v-if="recording" type="button" class="rec-indicator" data-rec-indicator aria-label="Aufnahme beenden" @click="toggleRecording">
+        <i aria-hidden="true"></i>{{ clock(recordingSeconds) }}
+      </button>
       <div class="history">
         <button type="button" :disabled="!store.canUndo.value" aria-label="Rückgängig" data-undo @click="store.undo()">↶</button>
         <button type="button" :disabled="!store.canRedo.value" aria-label="Wiederholen" data-redo @click="store.redo()">↷</button>
-      </div>
-      <div class="views" role="tablist" aria-label="Ansicht">
-        <button type="button" role="tab" :aria-selected="ui.view === 'pattern'" data-view="pattern" @click="store.setUi({ view: 'pattern' })">Muster</button>
-        <button type="button" role="tab" :aria-selected="ui.view === 'sound'" data-view="sound" @click="store.setUi({ view: 'sound' })">Klang</button>
-        <button type="button" role="tab" :aria-selected="ui.view === 'perform'" data-view="perform" @click="store.setUi({ view: 'perform' })">Live</button>
       </div>
     </header>
 
@@ -241,11 +328,31 @@ onBeforeUnmount(() => {
         @toggle="toggle"
         @focus="(lane) => store.setUi({ focus: lane })"
       />
+      <SongPanel v-else-if="ui.view === 'song'" :store="store" :play-entry="playEntry" @play-from="playFrom" />
       <SoundPanel v-else-if="ui.view === 'sound'" :store="store" />
-      <PerformPanel v-else :store="store" :engine="engine" :performance="performance" :play-row="playRow" :lit="lit" />
+      <PerformPanel
+        v-else
+        :store="store"
+        :engine="engine"
+        :performance="performance"
+        :play-row="playRow"
+        :lit="lit"
+        :recording="recording"
+        :recording-seconds="recordingSeconds"
+        @record="toggleRecording"
+      />
     </main>
 
     <ThumbEditor v-if="ui.view === 'pattern'" :store="store" @entered="(cell) => preview(ui.cursor.lane, cell)" />
+
+    <nav class="viewbar" role="tablist" aria-label="Ansicht">
+      <button type="button" role="tab" :aria-selected="ui.view === 'pattern'" data-view="pattern" @click="store.setUi({ view: 'pattern' })">Muster</button>
+      <button type="button" role="tab" :aria-selected="ui.view === 'song'" data-view="song" @click="store.setUi({ view: 'song' })">Song</button>
+      <button type="button" role="tab" :aria-selected="ui.view === 'sound'" data-view="sound" @click="store.setUi({ view: 'sound' })">Klang</button>
+      <button type="button" role="tab" :aria-selected="ui.view === 'perform'" data-view="perform" @click="store.setUi({ view: 'perform' })">Live</button>
+    </nav>
+
+    <RecordingSheet v-if="take" :take="take" @close="discardTake" />
 
     <div v-if="helpOpen" class="help" role="dialog" aria-modal="true" aria-labelledby="help-title">
       <div class="sheet">
@@ -257,8 +364,9 @@ onBeforeUnmount(() => {
           <li><b>Nach links wischen</b> löscht.</li>
           <li><b>Spurkopf antippen</b> zeigt alle Spalten der Spur: Akzent <code>!</code>, Slide <code>~</code>, Chance und Wiederholungen.</li>
           <li><b>BPM</b> ziehst du mit dem Daumen hoch oder runter.</li>
+          <li><b>Song</b> reiht Patterns aneinander: Tasten 1–8 schreiben, nach links wischen löscht, „ab hier“ spielt den Song von dort. Oben schaltest du Play zwischen <b>LOOP</b> (das gezeigte Pattern) und <b>SONG</b> um.</li>
           <li><b>Klang</b> hat die Regler der 303, Kits und Tonart.</li>
-          <li><b>Live</b> ist zum Spielen: Im Feld ziehst du Cutoff (quer) und Resonanz (hoch), der DJ-Filter federt zurück, Mutes schalten am nächsten Takt, <b>Break</b> halten nimmt die Kick raus, loslassen bringt den Drop.</li>
+          <li><b>Live</b> ist zum Spielen: Im Feld ziehst du Cutoff (quer) und Resonanz (hoch), der DJ-Filter federt zurück, Mutes schalten am nächsten Takt, <b>Break</b> halten nimmt die Kick raus, loslassen bringt den Drop. <b>REC</b> nimmt auf, was du hörst; danach kannst du es anhören, speichern oder teilen.</li>
         </ul>
         <p>Alles wird bei jeder Änderung auf diesem Handy gespeichert. Diese Hilfe findest du wieder unter <b>⋯</b>.</p>
         <button type="button" class="primary" data-help-close @click="closeHelp">Los geht's</button>

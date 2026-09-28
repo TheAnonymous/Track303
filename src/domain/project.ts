@@ -6,6 +6,7 @@ import {
   KITS,
   LANE_VOICES,
   LANES,
+  MAX_SONG_LENGTH,
   MAX_SWING,
   MAX_TEMPO,
   MIN_TEMPO,
@@ -63,6 +64,7 @@ export function createProject(): Project {
     volume: 0.85,
     patterns,
     activePattern: 0,
+    song: [0],
   };
 }
 
@@ -107,6 +109,14 @@ function sanitizePattern(value: unknown): Pattern {
   };
 }
 
+function sanitizeSong(value: unknown): number[] {
+  const entries = Array.isArray(value) ? value : [];
+  const song = entries
+    .filter((entry): entry is number => typeof entry === "number" && Number.isInteger(entry) && entry >= 0 && entry < PATTERN_COUNT)
+    .slice(0, MAX_SONG_LENGTH);
+  return song.length ? song : [0];
+}
+
 /** Any stored or imported value becomes a complete, valid project. */
 export function sanitizeProject(value: unknown): Project {
   const source = record(value);
@@ -127,5 +137,6 @@ export function sanitizeProject(value: unknown): Project {
       ? Array.from({ length: PATTERN_COUNT }, (_, index) => sanitizePattern(patterns[index]))
       : fallback.patterns,
     activePattern: typeof source.activePattern === "number" ? Math.max(0, Math.min(PATTERN_COUNT - 1, Math.round(source.activePattern))) : 0,
+    song: sanitizeSong(source.song),
   };
 }

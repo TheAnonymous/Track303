@@ -2,11 +2,13 @@ import * as Tone from "tone";
 import { noteMidi } from "../domain/music";
 import type { AcidKnobs, Cell, DrumCell, Lane, NoteCell, Pattern, Project } from "../domain/types";
 import { LANES } from "../domain/types";
+import { nextPosition, startPosition, type Arrangement, type PlayMode } from "./arrangement";
 import { createAcid303, createDrumKit, type Acid303, type DrumKit } from "./banks";
 import { applyTrackGraphParameters, createMasterGraph, createTrackGraph, setTrackGraphVolume, type MasterGraph, type TrackGraph } from "./graph";
 import type { TrackMacros } from "./kitty-types";
 import { PerformanceLayer, ROWS_PER_BAR, type PerformanceState } from "./performance-layer";
 import { duckEnvelope, faderGain } from "./polish";
+import { MasterRecorder, type Recording } from "./recorder";
 
 export type { PerformanceState } from "./performance-layer";
 
@@ -14,6 +16,8 @@ export type EngineStatus = "idle" | "starting" | "playing" | "suspended" | "erro
 
 export interface PlayheadEvent {
   pattern: number;
+  /** Song entry that plays, or `null` in loop mode. */
+  songIndex: number | null;
   row: number;
   /** Lanes that sounded on this row. */
   triggered: Lane[];
@@ -55,6 +59,10 @@ export class TrackerEngine {
   private row = 0;
   private pattern = 0;
   private queued: number | null = null;
+  private mode: PlayMode = "loop";
+  private songStart = 0;
+  private songIndex: number | null = null;
+  private readonly recorder = new MasterRecorder(() => undefined);
   private acidHeld = false;
   /** Rows since start, for bar lines. */
   private step = 0;
@@ -118,7 +126,9 @@ export class TrackerEngine {
       this.applyTiming();
       this.row = 0;
       this.step = 0;
-      this.pattern = this.project.activePattern;
+      const position = startPosition(this.arrangement, this.project.activePattern);
+      this.pattern = position.pattern;
+      this.songIndex = position.songIndex;
       this.queued = null;
       this.acidHeld = false;
       this.scheduleId = transport.scheduleRepeat((time) => this.tick(time), "16n");
@@ -145,10 +155,43 @@ export class TrackerEngine {
     this.emitStatus("idle");
   }
 
-  /** Switches at the end of the running pattern while playing, immediately otherwise. */
+  /** Loop mode: switches at the end of the running pattern while playing, immediately otherwise. The song ignores it. */
   queuePattern(index: number): void {
+    if (this.mode === "song") return;
     if (this.playing) this.queued = index === this.pattern ? null : index;
     else this.pattern = index;
+  }
+
+  get playMode(): PlayMode {
+    return this.mode;
+  }
+
+  /**
+   * Loop or song, and the song entry to start from. Switching while playing
+   * takes effect when the running pattern ends: the song then starts at
+   * `songStart`, a loop keeps the pattern that plays.
+   */
+  setArrangement(mode: PlayMode, songStart: number): void {
+    this.songStart = songStart;
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.songIndex = null;
+    this.queued = null;
+  }
+
+  /** Records what leaves the master until `stopRecording`. */
+  async startRecording(): Promise<void> {
+    await this.prepare();
+    if (!audible()) throw new Error("Audio ist pausiert");
+    await this.recorder.start(Tone.getDestination());
+  }
+
+  stopRecording(): Promise<Recording> {
+    return this.recorder.stop();
+  }
+
+  get recordingSeconds(): number {
+    return this.recorder.active ? this.recorder.seconds : 0;
   }
 
   /** Mutes at once (renders, tests). */
@@ -260,6 +303,10 @@ export class TrackerEngine {
     return this.graph;
   }
 
+  private get arrangement(): Arrangement {
+    return { mode: this.mode, song: this.project.song, songStart: this.songStart };
+  }
+
   private applyTiming(): void {
     const transport = Tone.getTransport();
     transport.bpm.value = this.project.tempo;
@@ -286,16 +333,17 @@ export class TrackerEngine {
       this.acidHeld = false;
     }
     const current = this.pattern;
+    const songIndex = this.songIndex;
     Tone.getDraw().schedule(() => {
-      for (const listener of this.playheadListeners) listener({ pattern: current, row, triggered });
+      for (const listener of this.playheadListeners) listener({ pattern: current, songIndex, row, triggered });
     }, time);
     this.row += 1;
     if (this.row >= pattern.rows) {
       this.row = 0;
-      if (this.queued !== null) {
-        this.pattern = this.queued;
-        this.queued = null;
-      }
+      const next = nextPosition({ pattern: this.pattern, songIndex: this.songIndex }, this.arrangement, this.queued);
+      this.pattern = next.pattern;
+      this.songIndex = next.songIndex;
+      this.queued = null;
     }
   }
 

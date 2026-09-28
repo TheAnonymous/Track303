@@ -1,13 +1,15 @@
 import { shallowRef, type ShallowRef } from "vue";
 import { createProject, emptyPattern, sanitizeProject } from "./domain/project";
 import type { Cell, EditStep, Lane, Pattern, Project, RowCount } from "./domain/types";
+import { MAX_SONG_LENGTH } from "./domain/types";
+import type { PlayMode } from "./sound/arrangement";
 
 const STORAGE_KEY = "track303.project.v1";
 const BACKUP_KEY = "track303.project.v1.backup";
 const HISTORY_LIMIT = 100;
 const MERGE_WINDOW_MS = 1_200;
 
-export type View = "pattern" | "sound" | "perform";
+export type View = "pattern" | "song" | "sound" | "perform";
 
 export interface Cursor {
   lane: Lane;
@@ -25,6 +27,9 @@ export interface UiState {
   octave: number;
   /** The last value entered per lane, repeated by a double tap. */
   last: Partial<Record<Lane, Cell>>;
+  /** Selected song entry; `song.length` is the slot after the last one, where new entries go. */
+  songCursor: number;
+  playMode: PlayMode;
 }
 
 export interface Storage {
@@ -53,7 +58,7 @@ export class Track303Store {
     const loaded = this.load();
     this.project = shallowRef(loaded.project);
     this.restoredFromBackup = loaded.fromBackup;
-    this.ui = shallowRef<UiState>({ cursor: { lane: "acid", row: 0 }, focus: null, editStep: 1, view: "pattern", octave: 2, last: {} });
+    this.ui = shallowRef<UiState>({ cursor: { lane: "acid", row: 0 }, focus: null, editStep: 1, view: "pattern", octave: 2, last: {}, songCursor: 0, playMode: "loop" });
   }
 
   get pattern() {
@@ -161,6 +166,36 @@ export class Track303Store {
     this.select(this.ui.value.cursor.lane, this.ui.value.cursor.row);
   }
 
+  selectSong(index: number): void {
+    this.setUi({ songCursor: Math.max(0, Math.min(this.project.value.song.length, Math.round(index))) });
+  }
+
+  /** Writes a pattern into the selected song entry (or appends it at the end) and moves on. */
+  songWrite(pattern: number): void {
+    const index = this.ui.value.songCursor;
+    const changed = this.edit((project) => {
+      if (index < project.song.length) project.song[index] = pattern;
+      else if (project.song.length < MAX_SONG_LENGTH) project.song.push(pattern);
+    });
+    if (changed || index < this.project.value.song.length) this.selectSong(index + 1);
+  }
+
+  /** Repeats the selected entry right after it (the last one, at the end slot). */
+  songInsert(): void {
+    const song = this.project.value.song;
+    if (song.length >= MAX_SONG_LENGTH) return;
+    const index = Math.min(this.ui.value.songCursor, song.length - 1);
+    this.edit((project) => { project.song.splice(index + 1, 0, project.song[index]!); });
+    this.selectSong(index + 1);
+  }
+
+  /** Removes a song entry; the song keeps at least one. */
+  songDelete(index = this.ui.value.songCursor): void {
+    if (this.project.value.song.length <= 1 || index >= this.project.value.song.length) return;
+    this.edit((project) => { project.song.splice(index, 1); });
+    this.selectSong(Math.min(this.ui.value.songCursor, this.project.value.song.length - 1));
+  }
+
   undo(): void {
     const previous = this.undoStack.pop();
     if (!previous) return;
@@ -168,6 +203,7 @@ export class Track303Store {
     this.lastMerge = null;
     this.commit(previous);
     this.select(this.ui.value.cursor.lane, this.ui.value.cursor.row);
+    this.selectSong(this.ui.value.songCursor);
   }
 
   redo(): void {
@@ -177,6 +213,7 @@ export class Track303Store {
     this.lastMerge = null;
     this.commit(next);
     this.select(this.ui.value.cursor.lane, this.ui.value.cursor.row);
+    this.selectSong(this.ui.value.songCursor);
   }
 
   private commit(project: Project): void {

@@ -6,7 +6,11 @@ function watchErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.stack ?? error.message));
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-  page.on("requestfailed", (request) => errors.push(`Request fehlgeschlagen: ${request.url()}`));
+  page.on("requestfailed", (request) => {
+    // Closing the recording sheet removes its player, which aborts the player's own blob read.
+    if (request.url().startsWith("blob:") && request.resourceType() === "media" && request.failure()?.errorText === "net::ERR_ABORTED") return;
+    errors.push(`Request fehlgeschlagen: ${request.url()} (${request.failure()?.errorText ?? "?"})`);
+  });
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.protocol.startsWith("http") && url.origin !== `http://127.0.0.1:${port}`) errors.push(`Externer Request: ${request.url()}`);
@@ -409,6 +413,124 @@ test("live view: mutes and the drop land on the bar line, the DJ filter springs 
   await expect(page.locator(".bar i.now")).toHaveCount(0);
   await page.locator('[data-mute="acid"]').tap();
   await expect(page.locator('[data-mute="acid"]')).toHaveAttribute("data-state", "on");
+  expect(errors).toEqual([]);
+});
+
+const entries = (page: Page) => page.locator("[data-song-entry]");
+
+test("song view: pads write and append entries, swipe deletes, undo restores", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-view="song"]').tap();
+  await expect(page.locator("[data-song-summary]")).toHaveText("1 Eintrag · 1 Takt · 0:01");
+  await expect(entries(page)).toHaveText([/P1/]);
+
+  await page.locator("[data-song-end]").tap();
+  await page.locator('[data-song-pad="1"]').tap();
+  await page.locator('[data-song-pad="2"]').tap();
+  await expect(entries(page)).toHaveText([/P1/, /P2/, /P3/]);
+  await expect(page.locator("[data-song-end]")).toHaveClass(/cursor/);
+
+  await entries(page).nth(1).tap();
+  await page.locator('[data-song-pad="0"]').tap();
+  await expect(entries(page)).toHaveText([/P1/, /P1/, /P3/]);
+  await expect(entries(page).nth(2)).toHaveClass(/cursor/);
+  await page.locator('[data-song-tool="repeat"]').tap();
+  await expect(entries(page)).toHaveText([/P1/, /P1/, /P3/, /P3/]);
+  await expect(page.locator("[data-song-summary]")).toContainText("4 Einträge · 4 Takte · 0:07");
+
+  const first = (await entries(page).first().boundingBox())!;
+  await swipe(page, first.x + first.width * 0.7, first.y + first.height / 2, -90, 3);
+  await expect(entries(page)).toHaveText([/P1/, /P3/, /P3/]);
+  await page.locator("[data-undo]").tap();
+  await expect(entries(page)).toHaveText([/P1/, /P1/, /P3/, /P3/]);
+
+  await page.reload();
+  await page.locator('[data-view="song"]').tap();
+  await expect(entries(page)).toHaveText([/P1/, /P1/, /P3/, /P3/]);
+  expect(errors).toEqual([]);
+});
+
+test("song mode plays the song list in order and 'ab hier' starts at the chosen entry", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  // Pattern 2 becomes a copy of pattern 1, so both are audible.
+  await page.locator("[data-pattern-menu]").tap();
+  await page.locator('[data-pattern-action="copy"]').tap();
+  await page.locator('[data-pattern="1"]').tap();
+  await page.locator("[data-pattern-menu]").tap();
+  await page.locator('[data-pattern-action="paste"]').tap();
+
+  await page.locator('[data-view="song"]').tap();
+  await page.locator("[data-song-end]").tap();
+  await page.locator('[data-song-pad="1"]').tap();
+  await expect(entries(page)).toHaveText([/P1/, /P2/]);
+
+  await page.locator("[data-mode]").tap();
+  await expect(page.locator("[data-mode]")).toHaveText(/SONG/);
+  await expect(page.locator("[data-song-hint]")).toHaveText("▶ spielt den Song");
+  await page.locator("[data-play]").tap();
+  await expect(entries(page).nth(0)).toHaveClass(/playhead/);
+  await expect(page.locator('[data-pattern="0"]')).toHaveClass(/sounding/);
+  await expect(entries(page).nth(1), "nach einem Takt kommt P2").toHaveClass(/playhead/, { timeout: 4_000 });
+  await expect(page.locator('[data-pattern="1"]')).toHaveClass(/sounding/);
+  await expect(entries(page).nth(0), "und dann wieder von vorn").toHaveClass(/playhead/, { timeout: 4_000 });
+
+  await page.locator('[data-pattern="4"]').tap();
+  await expect(page.locator(".pattern.queued"), "im Song-Modus zeigt ein Pattern-Tipp nur das Pattern").toHaveCount(0);
+
+  await entries(page).nth(1).tap();
+  await page.locator('[data-song-tool="play-from"]').tap();
+  await expect(page.locator("[data-play]")).toHaveAttribute("aria-pressed", "true");
+  await expect(entries(page).nth(1)).toHaveClass(/playhead/);
+  await page.locator("[data-play]").tap();
+
+  await page.locator("[data-mode]").tap();
+  await expect(page.locator("[data-mode]")).toHaveText(/LOOP/);
+  await page.locator('[data-pattern="0"]').tap();
+  await page.locator("[data-play]").tap();
+  await page.waitForTimeout(2_500);
+  await expect(page.locator('[data-pattern="0"]'), "Loop bleibt auf dem Pattern").toHaveClass(/sounding/);
+  await page.locator("[data-play]").tap();
+  expect(errors).toEqual([]);
+});
+
+test("records the live play as a WAV to listen to, save or throw away", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-view="perform"]').tap();
+  await page.locator("[data-play]").tap();
+  await page.locator("[data-rec]").tap();
+  await expect(page.locator("[data-rec]")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("[data-rec-indicator]"), "die Aufnahme ist auch oben sichtbar").toBeVisible();
+  await expect(page.locator("[data-rec-time]")).not.toHaveText("0:00", { timeout: 5_000 });
+  await page.waitForTimeout(1_200);
+  await page.locator("[data-rec-indicator]").tap();
+  await expect(page.locator("[data-take]")).toBeVisible();
+  await expect(page.locator("[data-rec-indicator]")).toHaveCount(0);
+  await expect(page.locator("[data-take] audio")).toHaveAttribute("src", /^blob:/);
+  await expect(page.locator("[data-take-close]")).toHaveText("Verwerfen");
+
+  const download = page.waitForEvent("download");
+  await page.locator("[data-take-save]").tap();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/^track303-\d{4}-\d{2}-\d{2}-\d{4}\.wav$/);
+  const path = testInfo.outputPath("live.wav");
+  await file.saveAs(path);
+  const { readFile } = await import("node:fs/promises");
+  const wav = await readFile(path);
+  expect(wav.subarray(0, 4).toString()).toBe("RIFF");
+  expect(wav.readUInt16LE(22), "Stereo").toBe(2);
+  expect(wav.readUInt32LE(40) / (wav.readUInt32LE(24) * 4), "mindestens anderthalb Sekunden").toBeGreaterThan(1.5);
+  let peak = 0;
+  for (let offset = 44; offset < wav.length; offset += 2) peak = Math.max(peak, Math.abs(wav.readInt16LE(offset)));
+  expect(peak).toBeGreaterThan(2_000);
+
+  await expect(page.locator("[data-take-close]")).toHaveText("Fertig");
+  await page.locator("[data-take-close]").tap();
+  await expect(page.locator("[data-take]")).toHaveCount(0);
+  await page.locator("[data-play]").tap();
   expect(errors).toEqual([]);
 });
 

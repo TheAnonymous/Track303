@@ -152,4 +152,38 @@ describe("Track303Store", () => {
     expect(store.pattern).toEqual(original);
     expect(store.ui.value.cursor.row).toBe(15);
   });
+
+  it("writes, appends, repeats and deletes song entries", () => {
+    const store = new Track303Store(storage);
+    expect(store.project.value.song).toEqual([0]);
+    store.selectSong(1);
+    store.songWrite(1);
+    store.songWrite(2);
+    expect(store.project.value.song).toEqual([0, 1, 2]);
+    expect(store.ui.value.songCursor).toBe(3);
+    store.selectSong(1);
+    store.songWrite(4);
+    expect(store.project.value.song).toEqual([0, 4, 2]);
+    expect(store.ui.value.songCursor).toBe(2);
+    store.songInsert();
+    expect(store.project.value.song).toEqual([0, 4, 2, 2]);
+    expect(store.ui.value.songCursor).toBe(3);
+    store.songDelete(0);
+    expect(store.project.value.song).toEqual([4, 2, 2]);
+    store.undo();
+    expect(store.project.value.song).toEqual([0, 4, 2, 2]);
+    store.selectSong(99);
+    expect(store.ui.value.songCursor).toBe(4);
+  });
+
+  it("keeps at least one song entry and at most the limit", () => {
+    const store = new Track303Store(storage);
+    store.songDelete(0);
+    expect(store.project.value.song).toEqual([0]);
+    for (let index = 0; index < 80; index += 1) store.songInsert();
+    expect(store.project.value.song).toHaveLength(64);
+    store.selectSong(64);
+    store.songWrite(3);
+    expect(store.project.value.song).toHaveLength(64);
+  });
 });

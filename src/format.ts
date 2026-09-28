@@ -1,5 +1,6 @@
 import { noteMidi, trackerNote } from "./domain/music";
-import type { Cell, Lane, Project } from "./domain/types";
+import type { Cell, Lane, Pattern, Project } from "./domain/types";
+import { LANES } from "./domain/types";
 import type { DrumVoice } from "./sound/kitty-types";
 
 export const LANE_LABELS: Record<Lane, string> = { bd: "BD", sd: "SD", hh: "HH", acid: "303" };
@@ -56,4 +57,21 @@ export function cellDescription(lane: Lane, row: number, cell: Cell, project: Pi
 /** Rows count from 00 as in trackers, in decimal so beats read as 00, 04, 08, 12. */
 export function rowLabel(row: number): string {
   return String(row).padStart(2, "0");
+}
+
+/** Song length in seconds: every entry's rows as sixteenths at the project tempo. */
+export function songSeconds(project: Pick<Project, "song" | "patterns" | "tempo">): number {
+  const rows = project.song.reduce((sum, index) => sum + (project.patterns[index]?.rows ?? 16), 0);
+  return (rows * 15) / project.tempo;
+}
+
+/** "1:05" */
+export function clock(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+/** Lanes that have anything in a pattern, for the song list's little lane marks. */
+export function usedLanes(pattern: Pattern | undefined): Lane[] {
+  return pattern ? LANES.filter((lane) => pattern.lanes[lane].some(Boolean)) : [];
 }
