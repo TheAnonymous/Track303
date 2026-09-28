@@ -23,20 +23,15 @@ async function open(page: Page): Promise<void> {
 const cell = (page: Page, lane: string, row: number) => page.locator(`.cell[data-lane="${lane}"][data-row="${row}"]`).first();
 
 /**
- * A real finger swipe through Chrome's touch pipeline, so touch-action and pointer
- * events behave as on the phone. A quick flick leaves a fling running, and Chrome
- * spends the next tap on stopping it, as on a real phone; `settle` rests the finger
- * before lifting it, as when dialling in a value.
+ * A real finger flick through Chrome's touch pipeline, so touch-action, pointer
+ * events and flings behave as on the phone (a fling left running would swallow
+ * the next tap; the app's drag surfaces prevent it).
  */
-async function swipe(page: Page, x: number, y: number, dx: number, dy = 0, settle = false): Promise<void> {
+async function swipe(page: Page, x: number, y: number, dx: number, dy = 0): Promise<void> {
   const client = await page.context().newCDPSession(page);
   await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
   for (let step = 1; step <= 6; step += 1) {
     await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + (dx * step) / 6, y: y + (dy * step) / 6 }] });
-  }
-  if (settle) {
-    await page.waitForTimeout(150);
-    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + dx, y: y + dy }] });
   }
   await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await client.detach();
@@ -82,6 +77,9 @@ test("fits a Pixel 7 without scrolling the page and shows the whole 16-row patte
   await page.reload();
   await expect(page.locator(".grid")).toBeVisible();
   await expect(page.locator(".help"), "die Hilfe kommt nur beim ersten Besuch").toHaveCount(0);
+  await page.locator("[data-pattern-menu]").tap();
+  await page.locator("[data-help-open]").tap();
+  await expect(page.locator(".help")).toBeVisible();
 });
 
 test.describe("on a 360 px wide phone", () => {
@@ -99,6 +97,15 @@ test.describe("on a 360 px wide phone", () => {
     expect((await page.locator("[data-octave]").boundingBox())!.height, "Okt 2 bleibt einzeilig").toBeLessThan(22);
     await cell(page, "acid", 15).scrollIntoViewIfNeeded();
     await expect(cell(page, "acid", 15)).toBeInViewport();
+
+    await page.locator('[data-view="perform"]').tap();
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(740);
+    for (const control of await page.locator(".perform button, .perform [role='slider']").all()) {
+      const box = (await control.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(360);
+      expect(box.y + box.height).toBeLessThanOrEqual(740);
+    }
+    expect((await page.locator("[data-xy]").boundingBox())!.height, "das Filter-Feld bleibt groß genug für den Daumen").toBeGreaterThanOrEqual(200);
   });
 });
 
@@ -251,7 +258,7 @@ test("the sound page turns the 303 knobs, sets tempo by drag and saves both", as
   await open(page);
 
   const bpm = (await page.getByRole("spinbutton", { name: "BPM" }).boundingBox())!;
-  await swipe(page, bpm.x + bpm.width / 2, bpm.y + bpm.height / 2, 0, -56, true);
+  await swipe(page, bpm.x + bpm.width / 2, bpm.y + bpm.height / 2, 0, -56);
   await expect(page.getByRole("spinbutton", { name: "BPM" })).toHaveAttribute("aria-valuenow", "144");
 
   await page.locator('[data-view="sound"]').tap();
@@ -308,6 +315,103 @@ test("pattern tools copy, paste, double and clear a pattern", async ({ page }) =
   expect(errors).toEqual([]);
 });
 
+/** Puts a finger down and leaves it there; the returned function lifts it. */
+async function hold(page: Page, x: number, y: number): Promise<{ move(toX: number, toY: number): Promise<void>; lift(): Promise<void> }> {
+  const client = await page.context().newCDPSession(page);
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+  return {
+    move: async (toX, toY) => {
+      for (let step = 1; step <= 5; step += 1) {
+        await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + ((toX - x) * step) / 5, y: y + ((toY - y) * step) / 5 }] });
+      }
+      x = toX;
+      y = toY;
+    },
+    lift: async () => {
+      await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await client.detach();
+    },
+  };
+}
+
+test("live view: the XY field plays cutoff and resonance and saves one undo step per gesture", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-view="perform"]').tap();
+  await expect(page.locator("[data-xy-readout]")).toHaveText("42 · 62");
+
+  const xy = (await page.locator("[data-xy]").boundingBox())!;
+  const finger = await hold(page, xy.x + xy.width / 2, xy.y + xy.height / 2);
+  await expect(page.locator("[data-xy-readout]")).toHaveText("50 · 50");
+  await finger.move(xy.x + xy.width * 0.9, xy.y + xy.height * 0.1);
+  await expect(page.locator("[data-xy-readout]")).toHaveText("90 · 90");
+  await expect(page.locator("[data-xy]")).toHaveClass(/touched/);
+  await expect(page.locator("[data-undo]"), "gespeichert wird erst beim Loslassen").toBeDisabled();
+  await finger.lift();
+  await expect(page.locator("[data-xy]")).not.toHaveClass(/touched/);
+  await expect(page.locator("[data-undo]")).toBeEnabled();
+
+  await page.locator('[data-view="sound"]').tap();
+  await expect(page.locator('[data-knob="cutoff"] output')).toHaveText("90");
+  await expect(page.locator('[data-knob="resonance"] output')).toHaveText("90");
+  await page.locator("[data-undo]").tap();
+  await expect(page.locator('[data-knob="cutoff"] output')).toHaveText("42");
+  await expect(page.locator('[data-knob="resonance"] output')).toHaveText("62");
+  await expect(page.locator("[data-undo]"), "eine Geste, ein Schritt").toBeDisabled();
+
+  await page.locator('[data-view="perform"]').tap();
+  await page.locator('[data-live-knob="envMod"] input').fill("0.9");
+  await page.locator('[data-live-knob="envMod"] input').dispatchEvent("change");
+  await expect(page.locator('[data-live-knob="envMod"] output')).toHaveText("90");
+  await page.reload();
+  await page.locator('[data-view="perform"]').tap();
+  await expect(page.locator('[data-live-knob="envMod"] output')).toHaveText("90");
+  expect(errors).toEqual([]);
+});
+
+test("live view: mutes and the drop land on the bar line, the DJ filter springs back", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-view="perform"]').tap();
+
+  await page.locator('[data-mute="hh"]').tap();
+  await expect(page.locator('[data-mute="hh"]'), "gestoppt schaltet sofort").toHaveAttribute("data-state", "muted");
+  await page.locator('[data-mute="hh"]').tap();
+  await expect(page.locator('[data-mute="hh"]')).toHaveAttribute("data-state", "on");
+
+  await page.locator("[data-play]").tap();
+  await expect(page.locator(".bar i.now")).toHaveCount(1);
+  await page.locator('[data-mute="acid"]').tap();
+  await expect(page.locator('[data-mute="acid"]')).toHaveAttribute("data-state", "pending");
+  await expect(page.locator('[data-mute="acid"]'), "am nächsten Takt").toHaveAttribute("data-state", "muted", { timeout: 4_000 });
+  await expect(page.locator('[data-mute="bd"].lit')).toHaveCount(1, { timeout: 4_000 });
+  await expect.poll(async () => page.locator('[data-mute="acid"].lit').count(), { timeout: 3_000 }).toBe(0);
+
+  const button = (await page.locator("[data-break]").boundingBox())!;
+  const finger = await hold(page, button.x + button.width / 2, button.y + button.height / 2);
+  await expect(page.locator("[data-break]")).toHaveAttribute("data-state", "break");
+  await expect(page.locator("[data-break]")).toContainText("Loslassen");
+  await page.waitForTimeout(2_000);
+  await expect(page.locator('[data-mute="bd"].lit'), "im Break ist die Kick raus").toHaveCount(0);
+  await finger.lift();
+  await expect(page.locator("[data-break]")).toHaveAttribute("data-state", /drop|idle/);
+  await expect(page.locator("[data-break]"), "Drop am nächsten Takt").toHaveAttribute("data-state", "idle", { timeout: 4_000 });
+
+  const dj = (await page.locator("[data-dj]").boundingBox())!;
+  const filterFinger = await hold(page, dj.x + dj.width / 2, dj.y + dj.height / 2);
+  await filterFinger.move(dj.x + dj.width * 0.1, dj.y + dj.height / 2);
+  await expect(page.locator("[data-dj]")).toHaveClass(/low/);
+  expect(Number(await page.locator("[data-dj]").getAttribute("data-value"))).toBeLessThan(-60);
+  await filterFinger.lift();
+  await expect(page.locator("[data-dj]")).toHaveAttribute("data-value", "0");
+
+  await page.locator("[data-play]").tap();
+  await expect(page.locator(".bar i.now")).toHaveCount(0);
+  await page.locator('[data-mute="acid"]').tap();
+  await expect(page.locator('[data-mute="acid"]')).toHaveAttribute("data-state", "on");
+  expect(errors).toEqual([]);
+});
+
 test("renders the starter groove offline with every lane audible and a lean audio graph", async ({ page }) => {
   test.setTimeout(120_000);
   const errors = watchErrors(page);
@@ -330,6 +434,12 @@ test("renders the starter groove offline with every lane audible and a lean audi
   const open = await page.evaluate(() => window.__track303AudioTest!.render(["acid"], 4, { cutoff: 1, resonance: 1, envMod: 1, drive: 1 }));
   expect(open.nonFinite).toBe(0);
   expect(open.peak, "voll aufgedrehte 303 bleibt unter 0 dBFS").toBeLessThanOrEqual(1);
+
+  const held = await page.evaluate(() => window.__track303AudioTest!.render(["bd"], 2, {}, { break: true }));
+  expect(held.peak, "im Break schweigt die Kick").toBeLessThan(0.001);
+  const breakMix = await page.evaluate(() => window.__track303AudioTest!.render(undefined, 4, {}, { break: true }));
+  expect(breakMix.nonFinite).toBe(0);
+  expect(breakMix.peak, "303 und Hats laufen im Break weiter").toBeGreaterThan(0.05);
 
   const nodes = await page.evaluate(() => window.__track303AudioTest!.countEngineNodes());
   expect(nodes.total).toBeLessThanOrEqual(240);

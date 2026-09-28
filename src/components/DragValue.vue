@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * A number changed by dragging the thumb up or down, as on the M8: one step
- * per few pixels, a short buzz per step. Arrow keys work too.
+ * per few pixels, a short buzz per step. Arrow keys work too. The touch's
+ * default is cancelled so Chrome starts no fling that would swallow the next tap.
  */
 const props = withDefaults(defineProps<{ value: number; min: number; max: number; label: string; pixelsPerStep?: number }>(), { pixelsPerStep: 7 });
 const emit = defineEmits<{ change: [value: number] }>();
@@ -13,7 +14,12 @@ function clamp(value: number): number {
 }
 
 function down(event: PointerEvent): void {
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  try {
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  } catch {
+    // The pointer ended before the capture; nothing to drag.
+    return;
+  }
   drag = { id: event.pointerId, y: event.clientY, start: props.value, last: props.value };
 }
 
@@ -48,6 +54,7 @@ function key(event: KeyboardEvent): void {
     :aria-valuenow="value"
     :aria-valuemin="min"
     :aria-valuemax="max"
+    @touchstart.prevent
     @pointerdown="down"
     @pointermove="move"
     @pointerup="end"

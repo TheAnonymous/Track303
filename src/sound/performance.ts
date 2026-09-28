@@ -34,7 +34,8 @@ export class PerformanceFilter extends Tone.ToneAudioNode {
   /** −1 closes the lowpass down to 110 Hz, +1 opens the highpass up to 2.8 kHz, 0 is neutral. */
   setFilter(value: number): void {
     const amount = Math.max(-1, Math.min(1, value));
-    const time = this.now();
+    // Under a thumb the filter reacts at once, not after Tone's scheduling look-ahead.
+    const time = this.immediate();
     const lowpass = amount < -0.005 ? 18_000 * (110 / 18_000) ** -amount : this.context.sampleRate / 2;
     const highpass = amount > 0.005 ? 25 * (2_800 / 25) ** amount : 0;
     this.lowpass.frequency.cancelScheduledValues(time);
@@ -47,7 +48,7 @@ export class PerformanceFilter extends Tone.ToneAudioNode {
     // An exponential approach never lands exactly on Nyquist or 0 Hz; snap there once settled.
     this.snapTimer = setTimeout(() => {
       this.snapTimer = null;
-      const now = this.now();
+      const now = this.immediate();
       this.lowpass.frequency.cancelScheduledValues(now);
       this.highpass.frequency.cancelScheduledValues(now);
       this.lowpass.frequency.setValueAtTime(this.context.sampleRate / 2, now);

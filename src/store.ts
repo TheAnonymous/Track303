@@ -7,7 +7,7 @@ const BACKUP_KEY = "track303.project.v1.backup";
 const HISTORY_LIMIT = 100;
 const MERGE_WINDOW_MS = 1_200;
 
-export type View = "pattern" | "sound";
+export type View = "pattern" | "sound" | "perform";
 
 export interface Cursor {
   lane: Lane;

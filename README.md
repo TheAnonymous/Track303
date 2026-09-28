@@ -21,6 +21,13 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
   nach links wischen löscht. BPM zieht man mit dem Daumen hoch oder runter.
 - **Klang.** Die Regler der 303 (Cutoff, Resonanz, Env Mod, Decay, Akzent,
   Drive, Raum), drei 303-Stimmen, drei Drum-Kits, Tempo, Swing und Tonart.
+- **Live.** Die Ansicht zum Spielen: ein großes Filter-Feld (Cutoff quer,
+  Resonanz hoch), das den 303-Filter sofort und stufenlos bewegt, auch mitten in
+  einer Note; Env Mod und Decay; ein DJ-Filter (Tiefpass/Hochpass), der beim
+  Loslassen zurückfedert; Mutes, die am nächsten Takt schalten; und
+  Break → Drop: Halten nimmt die Kick raus und lässt einen Hochpass über zwei
+  Takte steigen, Loslassen bringt den Drop am nächsten Takt. Eine Geste im
+  Filter-Feld ist ein Rückgängig-Schritt.
 - **Patterns.** Acht Patterns mit 16 oder 32 Zeilen. Während der Wiedergabe
   wechselt ein angetipptes Pattern am Ende des laufenden.
 - **Speichern.** Jede Änderung landet sofort im `localStorage`, mit der

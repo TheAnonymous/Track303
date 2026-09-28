@@ -18,8 +18,8 @@ export interface NodeCount {
 }
 
 export interface Track303AudioTestApi {
-  /** Renders the starter project, optionally with only some lanes, for `seconds`. */
-  render(lanes?: Lane[], seconds?: number, change?: Partial<Project["knobs"]>): Promise<RenderMetrics>;
+  /** Renders the starter project, optionally with only some lanes, other knobs or a held break, for `seconds`. */
+  render(lanes?: Lane[], seconds?: number, change?: Partial<Project["knobs"]>, perform?: { break?: boolean }): Promise<RenderMetrics>;
   countEngineNodes(): Promise<NodeCount>;
 }
 
@@ -54,7 +54,7 @@ function metrics(buffer: Tone.ToneAudioBuffer): RenderMetrics {
   return { peak, rmsDb: rms > 0 ? 20 * Math.log10(rms) : -Infinity, activeShare: windows ? active / windows : 0, nonFinite };
 }
 
-async function render(lanes: Lane[] = [...LANES], seconds = 4, change: Partial<Project["knobs"]> = {}): Promise<RenderMetrics> {
+async function render(lanes: Lane[] = [...LANES], seconds = 4, change: Partial<Project["knobs"]> = {}, perform: { break?: boolean } = {}): Promise<RenderMetrics> {
   const project = createProject();
   project.knobs = { ...project.knobs, ...change };
   // The engine lives in the offline context and is dropped with it; disposing it
@@ -63,6 +63,7 @@ async function render(lanes: Lane[] = [...LANES], seconds = 4, change: Partial<P
     const engine = new TrackerEngine(project);
     for (const lane of LANES) engine.setMuted(lane, !lanes.includes(lane));
     await engine.start();
+    if (perform.break) engine.setBreak(true);
   }, seconds, 2, 44_100);
   return metrics(buffer);
 }

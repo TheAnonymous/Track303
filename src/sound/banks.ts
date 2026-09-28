@@ -14,6 +14,10 @@ import { presetDefinition } from "./sound-presets";
  */
 
 const SLEEP_MARGIN_SECONDS = 0.5;
+/** The cutoff knob's range above the preset's base (cutoff 0 sits an octave below it). */
+const CUTOFF_OCTAVES = 5;
+/** Time constant of live knob moves: fast enough to follow a thumb, slow enough not to click. */
+const KNOB_SMOOTHING_SECONDS = 0.012;
 /** Longest drum decay (sub tail 0.68 s + release 0.32 s) plus margin. */
 const DRUM_TAIL_SECONDS = 1.5;
 
@@ -26,6 +30,7 @@ export interface DrumKit {
 export interface Acid303 {
   /** One note; `glide` slides from the sounding note, `hold` keeps it sounding into the next row. */
   trigger(midi: number, time: number, options: { accent: boolean; glide: boolean; hold: boolean; seconds: number; velocity: number }): void;
+  /** Cutoff and resonance move at once; the other knobs shape the next note. */
   setKnobs(knobs: AcidKnobs): void;
   release(time: number): void;
   dispose(): void;
@@ -129,12 +134,16 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
   const drive = new CharacterSaturator(definition.channel.saturationCurve);
   drive.connect(amp);
   const filter = new LeanFilter({ type: "lowpass", frequency: recipe.filterBase, Q: recipe.filterQ, rolloff: -24 }).connect(drive);
+  // The envelope sweeps up from the cutoff-0 frequency; the cutoff knob itself
+  // shifts the whole filter through detune, so it moves continuously and at
+  // once, also in the middle of a note.
+  const reference = recipe.filterBase / 2;
   const envelope = new Tone.FrequencyEnvelope({
     attack: 0.002,
     decay: recipe.filterDecay,
     sustain: recipe.filterSustain,
     release: definition.envelope.release,
-    baseFrequency: recipe.filterBase,
+    baseFrequency: reference,
     octaves: recipe.filterOctaves,
     exponent: 2.35,
   });
@@ -144,15 +153,23 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
   let current = knobs;
   let sounding = false;
 
-  /** The five 303 knobs mapped onto the preset's filter, envelope and drive. */
+  /** Cutoff and resonance follow the knobs right away, between notes too. */
+  const follow = (next: AcidKnobs, timeConstant: number) => {
+    const now = output.context.currentTime;
+    filter.detune.cancelAndHoldAtTime(now);
+    filter.detune.setTargetAtTime(next.cutoff * CUTOFF_OCTAVES * 1200, now, timeConstant);
+    filter.Q.cancelAndHoldAtTime(now);
+    filter.Q.setTargetAtTime(1.2 + next.resonance * (definition.effects.resonanceBase + definition.effects.resonancePressure), now, timeConstant);
+  };
+  follow(knobs, 0.001);
+
+  /** Env mod, decay, accent and drive shape each note as it starts. */
   const shape = (accent: boolean, time: number) => {
     const accentAmount = accent ? current.accent : 0;
-    const base = recipe.filterBase * 2 ** (current.cutoff * 5 - 1);
+    const base = reference * 2 ** (current.cutoff * CUTOFF_OCTAVES);
     const octaves = recipe.filterOctaves * (0.25 + current.envMod * 1.25) * (1 + (recipe.accent.filterBoost - 1) * accentAmount * 2);
-    envelope.baseFrequency = base;
     envelope.octaves = Math.max(0.2, Math.min(octaves, Math.log2(16_000 / base)));
     envelope.decay = recipe.filterDecay * 2 ** ((current.decay - 0.5) * 3) * (accent ? recipe.accent.decayMultiplier : 1);
-    filter.Q.rampTo(1.2 + current.resonance * (definition.effects.resonanceBase + definition.effects.resonancePressure), 0.018, time);
     drive.setAmount(0.02 + current.drive * 0.42 + accentAmount * recipe.accent.saturationBoost, 0.012, time);
   };
 
@@ -177,7 +194,9 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
       }
     },
     setKnobs: (knobs) => {
+      const moved = knobs.cutoff !== current.cutoff || knobs.resonance !== current.resonance;
       current = knobs;
+      if (moved) follow(knobs, KNOB_SMOOTHING_SECONDS);
     },
     release: (time) => {
       amp.triggerRelease(time);

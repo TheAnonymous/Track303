@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import DragValue from "./components/DragValue.vue";
+import PerformPanel from "./components/PerformPanel.vue";
 import SoundPanel from "./components/SoundPanel.vue";
 import ThumbEditor from "./components/ThumbEditor.vue";
 import TrackerGrid, { type Column } from "./components/TrackerGrid.vue";
 import { drum, note } from "./domain/project";
 import type { Cell, Lane, RowCount } from "./domain/types";
 import { CHANCES, MAX_TEMPO, MIN_TEMPO, PATTERN_COUNT, RATCHETS, ROW_COUNTS } from "./domain/types";
-import { TrackerEngine, type EngineStatus } from "./sound/engine";
+import { TrackerEngine, type EngineStatus, type PerformanceState } from "./sound/engine";
 import { Track303Store } from "./store";
 import { PlaybackWakeLock } from "./wake-lock";
 
@@ -25,6 +26,7 @@ const playingPattern = ref<number | null>(null);
 const playRow = ref<number | null>(null);
 const queued = ref<number | null>(null);
 const lit = shallowRef<readonly Lane[]>([]);
+const performance = shallowRef<PerformanceState>(engine.performanceState);
 const menuOpen = ref(false);
 const helpOpen = ref(!readFlag(HELP_SEEN_KEY));
 const notice = ref(store.restoredFromBackup ? "Der letzte Stand war beschädigt, die Sicherung davor ist geladen." : "");
@@ -39,6 +41,9 @@ const stopPlayhead = engine.onPlayhead((event) => {
   playRow.value = event.row;
   queued.value = engine.queuedPattern;
   lit.value = event.triggered;
+});
+const stopPerformance = engine.onPerformance((state) => {
+  performance.value = state;
 });
 const stopStatus = engine.onStatus((next) => {
   status.value = next;
@@ -114,6 +119,11 @@ function patternAction(action: "copy" | "paste" | "clear"): void {
   menuOpen.value = false;
 }
 
+function openHelp(): void {
+  menuOpen.value = false;
+  helpOpen.value = true;
+}
+
 function closeHelp(): void {
   helpOpen.value = false;
   writeFlag(HELP_SEEN_KEY);
@@ -161,6 +171,7 @@ onMounted(() => window.addEventListener("keydown", keydown));
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", keydown);
   stopPlayhead();
+  stopPerformance();
   stopStatus();
   wakeLock.playing = false;
   engine.dispose();
@@ -182,8 +193,8 @@ onBeforeUnmount(() => {
       <div class="views" role="tablist" aria-label="Ansicht">
         <button type="button" role="tab" :aria-selected="ui.view === 'pattern'" data-view="pattern" @click="store.setUi({ view: 'pattern' })">Muster</button>
         <button type="button" role="tab" :aria-selected="ui.view === 'sound'" data-view="sound" @click="store.setUi({ view: 'sound' })">Klang</button>
+        <button type="button" role="tab" :aria-selected="ui.view === 'perform'" data-view="perform" @click="store.setUi({ view: 'perform' })">Live</button>
       </div>
-      <button type="button" class="help-button" aria-label="Hilfe" @click="helpOpen = true">?</button>
     </header>
 
     <nav class="patterns" aria-label="Patterns">
@@ -199,7 +210,7 @@ onBeforeUnmount(() => {
       >
         {{ index }}
       </button>
-      <button type="button" class="pattern more" :aria-expanded="menuOpen" aria-label="Pattern-Werkzeuge" data-pattern-menu @click="menuOpen = !menuOpen">⋯</button>
+      <button type="button" class="pattern more" :aria-expanded="menuOpen" aria-label="Mehr: Pattern-Werkzeuge und Hilfe" data-pattern-menu @click="menuOpen = !menuOpen">⋯</button>
     </nav>
 
     <div v-if="menuOpen" class="menu" role="menu">
@@ -210,6 +221,7 @@ onBeforeUnmount(() => {
       <button type="button" role="menuitem" data-pattern-action="copy" @click="patternAction('copy')">Kopieren</button>
       <button type="button" role="menuitem" data-pattern-action="paste" :disabled="!store.hasClipboard.value" @click="patternAction('paste')">Einfügen</button>
       <button type="button" role="menuitem" data-pattern-action="clear" @click="patternAction('clear')">Leeren</button>
+      <button type="button" role="menuitem" class="help-item" data-help-open @click="openHelp">? Hilfe</button>
     </div>
 
     <p v-if="notice" class="notice" role="status" @click="notice = ''">{{ notice }}</p>
@@ -229,7 +241,8 @@ onBeforeUnmount(() => {
         @toggle="toggle"
         @focus="(lane) => store.setUi({ focus: lane })"
       />
-      <SoundPanel v-else :store="store" />
+      <SoundPanel v-else-if="ui.view === 'sound'" :store="store" />
+      <PerformPanel v-else :store="store" :engine="engine" :performance="performance" :play-row="playRow" :lit="lit" />
     </main>
 
     <ThumbEditor v-if="ui.view === 'pattern'" :store="store" @entered="(cell) => preview(ui.cursor.lane, cell)" />
@@ -244,9 +257,10 @@ onBeforeUnmount(() => {
           <li><b>Nach links wischen</b> löscht.</li>
           <li><b>Spurkopf antippen</b> zeigt alle Spalten der Spur: Akzent <code>!</code>, Slide <code>~</code>, Chance und Wiederholungen.</li>
           <li><b>BPM</b> ziehst du mit dem Daumen hoch oder runter.</li>
-          <li><b>Klang</b> hat die Regler der 303.</li>
+          <li><b>Klang</b> hat die Regler der 303, Kits und Tonart.</li>
+          <li><b>Live</b> ist zum Spielen: Im Feld ziehst du Cutoff (quer) und Resonanz (hoch), der DJ-Filter federt zurück, Mutes schalten am nächsten Takt, <b>Break</b> halten nimmt die Kick raus, loslassen bringt den Drop.</li>
         </ul>
-        <p>Alles wird bei jeder Änderung auf diesem Handy gespeichert.</p>
+        <p>Alles wird bei jeder Änderung auf diesem Handy gespeichert. Diese Hilfe findest du wieder unter <b>⋯</b>.</p>
         <button type="button" class="primary" data-help-close @click="closeHelp">Los geht's</button>
       </div>
     </div>

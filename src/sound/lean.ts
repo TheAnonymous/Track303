@@ -123,7 +123,7 @@ export class LeanFilter extends Tone.ToneAudioNode {
   readonly input: AudioNode;
   readonly output: AudioNode;
   private biquads: BiquadFilterNode[] = [];
-  private groups: { frequency: ParamGroup; Q: ParamGroup; gain: ParamGroup } | null = null;
+  private groups: { frequency: ParamGroup; Q: ParamGroup; gain: ParamGroup; detune: ParamGroup } | null = null;
   private readonly frequencyModulators: Array<Tone.ToneAudioNode | AudioNode> = [];
   private currentRolloff: -12 | -24 | -48 | -96;
 
@@ -133,9 +133,9 @@ export class LeanFilter extends Tone.ToneAudioNode {
     if (options.mutableRolloff) {
       this.input = this.context.createGain();
       this.output = this.context.createGain();
-      this.build(options.frequency, options.Q ?? 1, options.gain ?? 0);
+      this.build(options.frequency, options.Q ?? 1, options.gain ?? 0, 0);
     } else {
-      this.build(options.frequency, options.Q ?? 1, options.gain ?? 0);
+      this.build(options.frequency, options.Q ?? 1, options.gain ?? 0, 0);
       this.input = this.biquads[0]!;
       this.output = this.biquads[this.biquads.length - 1]!;
     }
@@ -151,6 +151,11 @@ export class LeanFilter extends Tone.ToneAudioNode {
 
   get gain(): ParamGroup {
     return this.groups!.gain;
+  }
+
+  /** Shifts the cutoff in cents on top of the frequency and any modulator (Track303's live cutoff knob). */
+  get detune(): ParamGroup {
+    return this.groups!.detune;
   }
 
   /**
@@ -172,8 +177,8 @@ export class LeanFilter extends Tone.ToneAudioNode {
     if (rolloff === this.currentRolloff) return;
     if (!this.options.mutableRolloff) throw new Error("LeanFilter: rolloff is fixed; create it with mutableRolloff");
     this.currentRolloff = rolloff;
-    const { frequency, Q, gain } = this.groups!;
-    this.build(frequency.value, Q.value, gain.value);
+    const { frequency, Q, gain, detune } = this.groups!;
+    this.build(frequency.value, Q.value, gain.value, detune.value);
   }
 
   dispose(): this {
@@ -194,7 +199,7 @@ export class LeanFilter extends Tone.ToneAudioNode {
     }
   }
 
-  private build(frequency: number, q: number, gain: number): void {
+  private build(frequency: number, q: number, gain: number, detune: number): void {
     this.teardown();
     const count = [-12, -24, -48, -96].indexOf(this.currentRolloff) + 1;
     this.biquads = Array.from({ length: count }, () => {
@@ -213,6 +218,7 @@ export class LeanFilter extends Tone.ToneAudioNode {
       Q: new ParamGroup(this.biquads.map((biquad) => param(this.context, biquad.Q, "positive", q))),
       // BiquadFilterNode.gain is already in decibels, so no conversion (as Tone.Filter's gain signal).
       gain: new ParamGroup(this.biquads.map((biquad) => param(this.context, biquad.gain, "decibels", gain, false))),
+      detune: new ParamGroup(this.biquads.map((biquad) => param(this.context, biquad.detune, "cents", detune, false))),
     };
     this.frequencyModulators.forEach((source) => this.attachModulator(source));
   }
@@ -222,6 +228,7 @@ export class LeanFilter extends Tone.ToneAudioNode {
       this.groups.frequency.dispose();
       this.groups.Q.dispose();
       this.groups.gain.dispose();
+      this.groups.detune.dispose();
     }
     if (this.options.mutableRolloff && this.biquads.length) {
       this.input.disconnect();

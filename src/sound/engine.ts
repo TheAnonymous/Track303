@@ -5,7 +5,10 @@ import { LANES } from "../domain/types";
 import { createAcid303, createDrumKit, type Acid303, type DrumKit } from "./banks";
 import { applyTrackGraphParameters, createMasterGraph, createTrackGraph, setTrackGraphVolume, type MasterGraph, type TrackGraph } from "./graph";
 import type { TrackMacros } from "./kitty-types";
+import { PerformanceLayer, ROWS_PER_BAR, type PerformanceState } from "./performance-layer";
 import { duckEnvelope, faderGain } from "./polish";
+
+export type { PerformanceState } from "./performance-layer";
 
 export type EngineStatus = "idle" | "starting" | "playing" | "suspended" | "error";
 
@@ -53,10 +56,15 @@ export class TrackerEngine {
   private pattern = 0;
   private queued: number | null = null;
   private acidHeld = false;
+  /** Rows since start, for bar lines. */
+  private step = 0;
   private ownContext: Tone.Context | null = null;
-  private readonly muted = new Set<Lane>();
+  /** 303 knobs under a thumb right now, ahead of the saved project. */
+  private liveKnobs: AcidKnobs | null = null;
+  private readonly performance = new PerformanceLayer();
   private readonly playheadListeners = new Set<(event: PlayheadEvent) => void>();
   private readonly statusListeners = new Set<(status: EngineStatus) => void>();
+  private readonly performanceListeners = new Set<(state: PerformanceState) => void>();
 
   /**
    * `latencyHint` gives the live app its own audio context, created on the first
@@ -85,6 +93,16 @@ export class TrackerEngine {
     return () => this.statusListeners.delete(listener);
   }
 
+  onPerformance(listener: (state: PerformanceState) => void): () => void {
+    this.performanceListeners.add(listener);
+    listener(this.performance.state);
+    return () => this.performanceListeners.delete(listener);
+  }
+
+  get performanceState(): PerformanceState {
+    return this.performance.state;
+  }
+
   async start(): Promise<void> {
     this.emitStatus("starting");
     try {
@@ -99,6 +117,7 @@ export class TrackerEngine {
       transport.position = 0;
       this.applyTiming();
       this.row = 0;
+      this.step = 0;
       this.pattern = this.project.activePattern;
       this.queued = null;
       this.acidHeld = false;
@@ -121,6 +140,8 @@ export class TrackerEngine {
     this.graph?.kit.release(now);
     this.graph?.acid303.release(now);
     this.acidHeld = false;
+    if (this.performance.settle()) this.graph?.master.performance.endRise(Tone.immediate());
+    this.emitPerformance();
     this.emitStatus("idle");
   }
 
@@ -130,9 +151,37 @@ export class TrackerEngine {
     else this.pattern = index;
   }
 
+  /** Mutes at once (renders, tests). */
   setMuted(lane: Lane, muted: boolean): void {
-    if (muted) this.muted.add(lane);
-    else this.muted.delete(lane);
+    this.performance.setMute(lane, muted);
+    this.emitPerformance();
+  }
+
+  /** Flips a lane's mute on the next bar line while playing, at once otherwise. */
+  toggleMute(lane: Lane): void {
+    this.performance.toggleMute(lane, this.playing);
+    this.emitPerformance();
+  }
+
+  /** Hold for the break (kick out, highpass rises over two bars); let go for the drop on the next bar line. */
+  setBreak(active: boolean): void {
+    const action = this.performance.setBreak(active, this.playing);
+    const filter = this.graph?.master.performance;
+    const now = Tone.immediate();
+    if (action === "rise") filter?.startRise(now, (2 * 240) / this.project.tempo);
+    if (action === "drop") filter?.endRise(now);
+    this.emitPerformance();
+  }
+
+  /** The master's DJ filter: −1 lowpass, 0 open, +1 highpass. */
+  setPerformanceFilter(value: number): void {
+    this.graph?.master.performance.setFilter(value);
+  }
+
+  /** Plays knob moves under a thumb at once; `null` hands back to the saved project. */
+  setLiveKnobs(knobs: AcidKnobs | null): void {
+    this.liveKnobs = knobs;
+    if (knobs) this.graph?.acid303.setKnobs(knobs);
   }
 
   syncProject(project: Project): void {
@@ -152,7 +201,7 @@ export class TrackerEngine {
       graph.acid303 = createAcid303(project.acidVoice, project.knobs, graph.acid.input, false);
       graph.acidPreset = project.acidVoice;
     }
-    graph.acid303.setKnobs(project.knobs);
+    graph.acid303.setKnobs(this.liveKnobs ?? project.knobs);
     applyTrackGraphParameters(graph.acid, "acid", project.acidVoice, acidMacros(project.knobs), 0.08);
   }
 
@@ -224,6 +273,12 @@ export class TrackerEngine {
     const pattern = this.project.patterns[this.pattern];
     if (!pattern) return;
     const row = this.row;
+    if (this.step % ROWS_PER_BAR === 0) {
+      const { drop, changed } = this.performance.barLine();
+      if (drop) graph.master.performance.endRise(time);
+      if (changed) Tone.getDraw().schedule(() => this.emitPerformance(), time);
+    }
+    this.step += 1;
     const triggered = LANES.filter((lane) => this.playCell(graph, pattern, lane, row, time));
     if (!triggered.includes("acid") && this.acidHeld) {
       // A held (slid-into) note whose follower did not play ends here.
@@ -246,7 +301,7 @@ export class TrackerEngine {
 
   private playCell(graph: Graph, pattern: Pattern, lane: Lane, row: number, time: number): boolean {
     const cell = pattern.lanes[lane][row];
-    if (!cell || this.muted.has(lane)) return false;
+    if (!cell || this.performance.silences(lane)) return false;
     if (cell.chance < 1 && Math.random() >= cell.chance) return false;
     const sixteenth = 15 / this.project.tempo;
     const hits = Math.max(1, cell.ratchet);
@@ -291,6 +346,11 @@ export class TrackerEngine {
 
   private midi(cell: NoteCell): number {
     return noteMidi(this.project.root, this.project.scale, cell.degree, cell.octave);
+  }
+
+  private emitPerformance(): void {
+    const state = this.performance.state;
+    for (const listener of this.performanceListeners) listener(state);
   }
 
   private emitStatus(status: EngineStatus): void {
