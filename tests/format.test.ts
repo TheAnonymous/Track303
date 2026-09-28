@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createProject, drum, emptyPattern, note } from "../src/domain/project";
-import { cellCode, cellDescription, cellFlags, chanceCode, clock, EMPTY_CELL, hasDepth, ratchetCode, rowLabel, songSeconds, usedLanes } from "../src/format";
+import { cellCode, cellDescription, cellFlags, chanceCode, clock, EMPTY_CELL, fxCode, hasDepth, ratchetCode, rowLabel, songSeconds, usedLanes } from "../src/format";
 
 const key = { root: "A", scale: "minor" } as const;
 
@@ -49,5 +49,15 @@ describe("song helpers", () => {
     const project = createProject();
     expect(usedLanes(project.patterns[0])).toEqual(["bd", "sd", "hh", "acid"]);
     expect(usedLanes(project.patterns[1])).toEqual([]);
+  });
+});
+
+describe("effect text", () => {
+  it("shows effects as a code and describes them in words", () => {
+    const cell = { ...note(0), fx: { type: "DL", value: 2 } as const };
+    expect(fxCode(cell)).toBe("DL2");
+    expect(fxCode(note(0))).toBe("···");
+    expect(hasDepth(cell)).toBe(true);
+    expect(cellDescription("acid", 0, cell, key)).toBe("303 Zeile 00: A-2, Später ½ Zeile");
   });
 });

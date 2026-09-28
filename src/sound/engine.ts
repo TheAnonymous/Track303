@@ -1,6 +1,6 @@
 import * as Tone from "tone";
-import { noteMidi } from "../domain/music";
-import type { AcidKnobs, Cell, DrumCell, Lane, NoteCell, Pattern, Project } from "../domain/types";
+import { noteMidi, shiftDegree } from "../domain/music";
+import type { AcidKnobs, Cell, DrumCell, FxValue, Lane, NoteCell, Pattern, Project } from "../domain/types";
 import { LANES } from "../domain/types";
 import { nextPosition, startPosition, type Arrangement, type PlayMode } from "./arrangement";
 import { createAcid303, createDrumKit, type Acid303, type DrumKit } from "./banks";
@@ -9,6 +9,7 @@ import type { TrackMacros } from "./kitty-types";
 import { PerformanceLayer, ROWS_PER_BAR, type PerformanceState } from "./performance-layer";
 import { duckEnvelope, faderGain } from "./polish";
 import { MasterRecorder, type Recording } from "./recorder";
+import { safeEffectParameters } from "./sound-presets";
 
 export type { PerformanceState } from "./performance-layer";
 
@@ -24,6 +25,14 @@ export interface PlayheadEvent {
 }
 
 const DRUM_MACROS: TrackMacros = { color: 0.55, pressure: 0.55, space: 0.12, motion: 0.2, density: 0.6 };
+
+/* What the effect values do (see FX_TYPES). */
+const ECHO_SEND: Record<FxValue, number> = { 1: 0.3, 2: 0.55, 3: 0.85 };
+const VOLUME: Record<FxValue, number> = { 1: 0.3, 2: 0.55, 3: 0.8 };
+/** Share of the row a 303 note sounds; 0.55 without GT. */
+const GATE: Record<FxValue, number> = { 1: 0.15, 2: 0.3, 3: 0.9 };
+/** Scale steps an arpeggio walks through within its row. */
+const ARPEGGIOS: Record<FxValue, readonly number[]> = { 1: [0, 2, 4], 2: [0, 4, 7], 3: [0, 7, 0, 7] };
 const STRIP_GAINS = { drums: 0.88, acid: 0.8 } as const;
 
 /** Whether scheduled sound will be heard: the live context runs, or an offline render is being prepared. */
@@ -353,25 +362,42 @@ export class TrackerEngine {
     if (cell.chance < 1 && Math.random() >= cell.chance) return false;
     const sixteenth = 15 / this.project.tempo;
     const hits = Math.max(1, cell.ratchet);
+    const fx = cell.fx;
+    const at = fx?.type === "DL" ? time + (fx.value * sixteenth) / 4 : time;
+    const volume = fx?.type === "VL" ? VOLUME[fx.value] : 1;
+    if (fx?.type === "EC") this.throwEcho(cell.kind === "drum" ? graph.drums : graph.acid, at, ECHO_SEND[fx.value], sixteenth);
     if (cell.kind === "drum") {
-      this.playDrum(graph, cell, time, sixteenth, hits);
+      this.playDrum(graph, cell, at, sixteenth, hits, volume);
       return true;
     }
-    this.playAcid(graph, pattern, cell, row, time, sixteenth, hits);
+    this.playAcid(graph, pattern, cell, row, at, sixteenth, hits, volume);
     return true;
   }
 
-  private playDrum(graph: Graph, cell: DrumCell, time: number, sixteenth: number, hits: number): void {
-    const velocity = cell.accent ? 1 : 0.78;
+  private playDrum(graph: Graph, cell: DrumCell, time: number, sixteenth: number, hits: number, volume: number): void {
+    const velocity = (cell.accent ? 1 : 0.78) * volume;
     for (let hit = 0; hit < hits; hit += 1) graph.kit.trigger(cell.voice, time + (hit * sixteenth) / hits, velocity * (hit === 0 ? 1 : 0.84));
-    if (cell.voice === "kick") this.duck(graph, time);
+    if (cell.voice === "kick" && volume >= 0.5) this.duck(graph, time);
   }
 
-  private playAcid(graph: Graph, pattern: Pattern, cell: NoteCell, row: number, time: number, sixteenth: number, hits: number): void {
+  private playAcid(graph: Graph, pattern: Pattern, cell: NoteCell, row: number, time: number, sixteenth: number, hits: number, volume: number): void {
+    const fx = cell.fx;
+    const velocity = 0.8 * volume;
+    const filterKick = fx?.type === "FL" ? fx.value : 0;
+    if (fx?.type === "AR") {
+      // An arpeggio walks up the scale within the row; it replaces repeats.
+      const steps = ARPEGGIOS[fx.value];
+      steps.forEach((step, index) => {
+        const note = shiftDegree(cell.degree, cell.octave, step);
+        graph.acid303.trigger(this.midi({ ...cell, ...note }), time + (index * sixteenth) / steps.length, { accent: cell.accent && index === 0, glide: false, hold: false, seconds: (sixteenth / steps.length) * 0.75, velocity, filterKick });
+      });
+      this.acidHeld = false;
+      return;
+    }
     const midi = this.midi(cell);
     if (hits > 1) {
       for (let hit = 0; hit < hits; hit += 1) {
-        graph.acid303.trigger(midi, time + (hit * sixteenth) / hits, { accent: cell.accent, glide: false, hold: false, seconds: (sixteenth / hits) * 0.7, velocity: 0.8 });
+        graph.acid303.trigger(midi, time + (hit * sixteenth) / hits, { accent: cell.accent, glide: false, hold: false, seconds: (sixteenth / hits) * 0.7, velocity, filterKick });
       }
       this.acidHeld = false;
       return;
@@ -379,8 +405,22 @@ export class TrackerEngine {
     // A slide on a row glides into its note from the one before, which keeps sounding until then.
     const next = row + 1 < pattern.rows ? pattern.lanes.acid[row + 1] : null;
     const hold = Boolean(next && next.kind === "note" && next.slide);
-    graph.acid303.trigger(midi, time, { accent: cell.accent, glide: cell.slide && this.acidHeld, hold, seconds: sixteenth * 0.55, velocity: 0.8 });
+    const gate = fx?.type === "GT" ? GATE[fx.value] : 0.55;
+    graph.acid303.trigger(midi, time, { accent: cell.accent, glide: cell.slide && this.acidHeld, hold, seconds: sixteenth * gate, velocity, filterKick });
     this.acidHeld = hold;
+  }
+
+  /** Opens the strip's delay send for one row, so that hit echoes on (a dub-style throw). */
+  private throwEcho(strip: TrackGraph, time: number, level: number, sixteenth: number): void {
+    const graph = this.graph;
+    if (!graph) return;
+    const base = strip === graph.drums
+      ? safeEffectParameters("drums", graph.kitPreset, DRUM_MACROS).delayWet
+      : safeEffectParameters("acid", graph.acidPreset, acidMacros(this.liveKnobs ?? this.project.knobs)).delayWet;
+    const send = strip.delaySend.gain;
+    send.cancelAndHoldAtTime(time);
+    send.setValueAtTime(Math.max(base, level), time);
+    send.setValueAtTime(base, time + sixteenth * 0.9);
   }
 
   private duck(graph: Graph, time: number): void {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { noteMidi, scaleNames, trackerNote } from "../src/domain/music";
+import { noteMidi, scaleNames, shiftDegree, trackerNote } from "../src/domain/music";
 
 describe("noteMidi", () => {
   it("counts octave 2 from MIDI 36 like Kitty's acid line", () => {
@@ -34,5 +34,17 @@ describe("scaleNames", () => {
     expect(scaleNames("A", "minor")).toEqual(["A", "B", "C", "D", "E", "F", "G"]);
     expect(scaleNames("E", "phrygian")).toEqual(["E", "F", "G", "A", "B", "C", "D"]);
     expect(scaleNames("F#", "minor")[0]).toBe("F#");
+  });
+});
+
+describe("shiftDegree", () => {
+  it("walks up the scale and carries into the next octave", () => {
+    expect(shiftDegree(0, 2, 2)).toEqual({ degree: 2, octave: 2 });
+    expect(shiftDegree(5, 2, 4)).toEqual({ degree: 2, octave: 3 });
+    expect(shiftDegree(3, 2, 7)).toEqual({ degree: 3, octave: 3 });
+  });
+
+  it("stays on the note instead of leaving the four octaves", () => {
+    expect(shiftDegree(4, 4, 7)).toEqual({ degree: 4, octave: 4 });
   });
 });

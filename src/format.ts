@@ -1,5 +1,5 @@
 import { noteMidi, trackerNote } from "./domain/music";
-import type { Cell, Lane, Pattern, Project } from "./domain/types";
+import type { Cell, Fx, FxType, FxValue, Lane, Pattern, Project } from "./domain/types";
 import { LANES } from "./domain/types";
 import type { DrumVoice } from "./sound/kitty-types";
 
@@ -23,9 +23,30 @@ export function cellFlags(cell: Cell): string {
   return `${cell.accent ? "!" : ""}${cell.kind === "note" && cell.slide ? "~" : ""}`;
 }
 
-/** Whether a cell uses the deeper columns (chance, repeats), shown as a dot in the overview. */
+/** Whether a cell uses the deeper columns (chance, repeats, an effect), shown as a dot in the overview. */
 export function hasDepth(cell: Cell): boolean {
-  return Boolean(cell && (cell.chance < 1 || cell.ratchet > 1));
+  return Boolean(cell && (cell.chance < 1 || cell.ratchet > 1 || cell.fx));
+}
+
+export const FX_LABELS: Record<FxType, string> = { EC: "Echo", DL: "Später", VL: "Leiser", GT: "Länge", FL: "Filter", AR: "Arp" };
+
+/** What values 1–3 mean for each effect, as the value buttons say it. */
+export const FX_VALUE_LABELS: Record<FxType, Record<FxValue, string>> = {
+  EC: { 1: "wenig", 2: "mittel", 3: "viel" },
+  DL: { 1: "¼ Zeile", 2: "½ Zeile", 3: "¾ Zeile" },
+  VL: { 1: "30 %", 2: "55 %", 3: "80 %" },
+  GT: { 1: "sehr kurz", 2: "kurz", 3: "lang" },
+  FL: { 1: "+1", 2: "+2", 3: "+3" },
+  AR: { 1: "Dreiklang", 2: "Quinte", 3: "Oktave" },
+};
+
+/** "EC2", or dots. */
+export function fxCode(cell: Cell): string {
+  return cell?.fx ? `${cell.fx.type}${cell.fx.value}` : "···";
+}
+
+export function fxDescription(fx: Fx): string {
+  return `${FX_LABELS[fx.type]} ${FX_VALUE_LABELS[fx.type][fx.value]}`;
 }
 
 export function chanceCode(cell: Cell): string {
@@ -50,6 +71,7 @@ export function cellDescription(lane: Lane, row: number, cell: Cell, project: Pi
     if (cell.kind === "note" && cell.slide) parts.push("Slide");
     if (cell.chance < 1) parts.push(`Chance ${chanceLabel(cell.chance)}`);
     if (cell.ratchet > 1) parts.push(`${cell.ratchet}-fach`);
+    if (cell.fx) parts.push(fxDescription(cell.fx));
   }
   return `${LANE_LABELS[lane]} Zeile ${rowLabel(row)}: ${parts.join(", ")}`;
 }

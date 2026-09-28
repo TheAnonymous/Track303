@@ -69,4 +69,19 @@ describe("sanitizeProject", () => {
     expect(sanitizeProject({}).song).toEqual([0]);
     expect(sanitizeProject({ song: Array.from({ length: 90 }, () => 1) }).song).toHaveLength(64);
   });
+
+  it("keeps effects only where the lane offers them, with values 1–3", () => {
+    const pattern = emptyPattern() as unknown as { lanes: Record<string, unknown[]> };
+    pattern.lanes.bd![0] = { kind: "drum", voice: "kick", fx: { type: "EC", value: 3 } };
+    pattern.lanes.bd![1] = { kind: "drum", voice: "kick", fx: { type: "AR", value: 1 } };
+    pattern.lanes.acid![0] = { kind: "note", degree: 0, fx: { type: "AR", value: 2 } };
+    pattern.lanes.acid![1] = { kind: "note", degree: 0, fx: { type: "GT", value: 9 } };
+    pattern.lanes.acid![2] = { kind: "note", degree: 0, fx: "EC1" };
+    const lanes = sanitizeProject({ patterns: [pattern] }).patterns[0]!.lanes;
+    expect(lanes.bd[0]).toMatchObject({ fx: { type: "EC", value: 3 } });
+    expect(lanes.bd[1]).not.toHaveProperty("fx");
+    expect(lanes.acid[0]).toMatchObject({ fx: { type: "AR", value: 2 } });
+    expect(lanes.acid[1]).not.toHaveProperty("fx");
+    expect(lanes.acid[2]).not.toHaveProperty("fx");
+  });
 });

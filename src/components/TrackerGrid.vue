@@ -2,11 +2,11 @@
 import { computed, nextTick, ref, watch } from "vue";
 import type { Cell, Lane, Pattern, Project } from "../domain/types";
 import { LANES } from "../domain/types";
-import { cellCode, cellDescription, cellFlags, chanceCode, hasDepth, LANE_LABELS, LANE_NAMES, ratchetCode, rowLabel } from "../format";
+import { cellCode, cellDescription, cellFlags, chanceCode, fxCode, hasDepth, LANE_LABELS, LANE_NAMES, ratchetCode, rowLabel } from "../format";
 import { horizontalSwipeGuard } from "../horizontal-swipe";
 import type { Cursor } from "../store";
 
-export type Column = "main" | "accent" | "slide" | "chance" | "ratchet";
+export type Column = "main" | "accent" | "slide" | "chance" | "ratchet" | "fx";
 
 const props = defineProps<{
   project: Project;
@@ -33,8 +33,8 @@ const DOUBLE_TAP_MS = 320;
 const FOLLOW_PAUSE_MS = 3_000;
 
 const rows = computed(() => Array.from({ length: props.pattern.rows }, (_, row) => row));
-const columns = computed<Column[]>(() => props.focus === "acid" ? ["main", "accent", "slide", "chance", "ratchet"] : ["main", "accent", "chance", "ratchet"]);
-const COLUMN_LABELS: Record<Column, string> = { main: "Note", accent: "Akz", slide: "Sld", chance: "Chn", ratchet: "Wdh" };
+const columns = computed<Column[]>(() => props.focus === "acid" ? ["main", "accent", "slide", "chance", "ratchet", "fx"] : ["main", "accent", "chance", "ratchet", "fx"]);
+const COLUMN_LABELS: Record<Column, string> = { main: "Note", accent: "Akz", slide: "Sld", chance: "Chn", ratchet: "Wdh", fx: "FX" };
 
 function cellAt(lane: Lane, row: number): Cell {
   return props.pattern.lanes[lane][row] ?? null;
@@ -48,6 +48,7 @@ function columnText(lane: Lane, row: number, column: Column): string {
     case "slide": return cell?.kind === "note" && cell.slide ? "~" : "·";
     case "chance": return chanceCode(cell);
     case "ratchet": return ratchetCode(cell);
+    case "fx": return fxCode(cell);
   }
 }
 
@@ -60,6 +61,7 @@ function columnSet(lane: Lane, row: number, column: Column): boolean {
     case "slide": return cell.kind === "note" && cell.slide;
     case "chance": return cell.chance < 1;
     case "ratchet": return cell.ratchet > 1;
+    case "fx": return Boolean(cell.fx);
   }
 }
 

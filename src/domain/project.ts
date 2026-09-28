@@ -1,9 +1,11 @@
 import type { DrumVoice } from "../sound/kitty-types";
-import type { AcidKnobs, Cell, DrumCell, Lane, NoteCell, Pattern, Project, RowCount } from "./types";
+import type { AcidKnobs, Cell, DrumCell, Fx, Lane, NoteCell, Pattern, Project, RowCount } from "./types";
 import {
   ACID_VOICES,
   CHANCES,
+  FX_VALUES,
   KITS,
+  LANE_FX,
   LANE_VOICES,
   LANES,
   MAX_SONG_LENGTH,
@@ -80,20 +82,33 @@ function pick<T>(value: unknown, allowed: readonly T[], fallback: T): T {
   return allowed.includes(value as T) ? (value as T) : fallback;
 }
 
+/** An effect the lane offers, with a valid value; anything else is dropped. */
+function sanitizeFx(value: unknown, lane: Lane): Fx | null {
+  const source = record(value);
+  const type = LANE_FX[lane].find((candidate) => candidate === source.type);
+  const level = FX_VALUES.find((candidate) => candidate === source.value);
+  return type && level ? { type, value: level } : null;
+}
+
 function sanitizeCell(value: unknown, lane: Lane): Cell {
   const source = record(value);
   if (value === null || typeof value !== "object") return null;
   const chance = pick(source.chance, CHANCES, 1);
   const ratchet = pick(source.ratchet, RATCHETS, 1);
   const accent = source.accent === true;
+  const fx = sanitizeFx(source.fx, lane);
+  let cell: DrumCell | NoteCell;
   if (lane === "acid") {
     if (source.kind !== "note") return null;
     const degree = typeof source.degree === "number" ? Math.max(0, Math.min(6, Math.round(source.degree))) : 0;
-    return { kind: "note", degree, octave: pick(source.octave, OCTAVES, 2), accent, slide: source.slide === true, chance, ratchet };
+    cell = { kind: "note", degree, octave: pick(source.octave, OCTAVES, 2), accent, slide: source.slide === true, chance, ratchet };
+  } else {
+    const voices: readonly DrumVoice[] = LANE_VOICES[lane];
+    if (source.kind !== "drum" || !voices.includes(source.voice as DrumVoice)) return null;
+    cell = { kind: "drum", voice: source.voice as DrumVoice, accent, chance, ratchet };
   }
-  const voices: readonly DrumVoice[] = LANE_VOICES[lane];
-  if (source.kind !== "drum" || !voices.includes(source.voice as DrumVoice)) return null;
-  return { kind: "drum", voice: source.voice as DrumVoice, accent, chance, ratchet };
+  if (fx) cell.fx = fx;
+  return cell;
 }
 
 function sanitizePattern(value: unknown): Pattern {

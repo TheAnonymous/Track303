@@ -186,4 +186,20 @@ describe("Track303Store", () => {
     store.songWrite(3);
     expect(store.project.value.song).toHaveLength(64);
   });
+
+  it("sets, changes and removes a row's effect, and a new note keeps it", () => {
+    const store = new Track303Store(storage);
+    store.select("acid", 0);
+    store.setFx({ type: "EC", value: 2 });
+    expect(store.pattern.lanes.acid[0]).toMatchObject({ fx: { type: "EC", value: 2 } });
+    store.setFx({ type: "EC", value: 3 });
+    expect(store.pattern.lanes.acid[0]?.fx).toEqual({ type: "EC", value: 3 });
+    store.setFx(null);
+    expect(store.pattern.lanes.acid[0]).not.toHaveProperty("fx");
+    store.undo();
+    expect(store.pattern.lanes.acid[0]?.fx).toEqual({ type: "EC", value: 3 });
+    store.select("acid", 1);
+    store.setFx({ type: "GT", value: 1 });
+    expect(store.pattern.lanes.acid[1], "an empty row takes no effect").toBeNull();
+  });
 });

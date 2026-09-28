@@ -540,6 +540,53 @@ test("records the live play as a WAV to listen to, save or throw away", async ({
   expect(errors).toEqual([]);
 });
 
+test("effects: the FX column opens the effect pads, values read in words, drums offer fewer", async ({ page }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-focus-lane="acid"]').first().tap();
+  await expect(page.locator(".head.columns")).toContainText("FX");
+  const fx = (row: number, lane = "acid") => page.locator(`.cell[data-lane="${lane}"][data-row="${row}"][data-column="fx"]`);
+
+  await fx(3).tap();
+  await expect(page.locator(".where")).toContainText("Zeile 03");
+  await expect(page.locator("[data-fx]")).toHaveText([/EC/, /DL/, /VL/, /GT/, /FL/, /AR/]);
+  await expect(page.locator("[data-fx-value]").first()).toBeDisabled();
+  await page.locator('[data-fx="AR"]').tap();
+  await expect(fx(3)).toHaveText("AR2");
+  await expect(page.locator("[data-fx-value]")).toHaveText([/Dreiklang/, /Quinte/, /Oktave/]);
+  await page.locator('[data-fx-value="3"]').tap();
+  await expect(fx(3)).toHaveText("AR3");
+  await expect(page.locator("[data-cursor-value]")).toContainText("AR3");
+  await page.locator('[data-fx="DL"]').tap();
+  await expect(fx(3), "anderer Effekt, Stufe bleibt").toHaveText("DL3");
+  await expect(page.locator('[data-fx-value="1"]')).toContainText("¼ Zeile");
+
+  await fx(1).tap();
+  await expect(page.locator('[data-fx="EC"]'), "leere Zeile nimmt keinen Effekt").toBeDisabled();
+
+  await page.locator('[data-focus-lane="sd"]').tap();
+  await fx(4, "sd").tap();
+  await expect(page.locator("[data-fx]")).toHaveText([/EC/, /DL/, /VL/]);
+  await page.locator('[data-fx="EC"]').tap();
+  await page.locator("[data-fx-off]").tap();
+  await expect(fx(4, "sd")).toHaveText("···");
+  await page.locator("[data-undo]").tap();
+  await expect(fx(4, "sd")).toHaveText("EC2");
+
+  await page.locator('[data-editor-mode="notes"]').tap();
+  await expect(page.locator('.pad[data-voice="clap"]')).toBeVisible();
+  await page.locator('.pad[data-voice="snare"]').tap();
+  await page.locator("[data-overview]").tap();
+  await expect(cell(page, "sd", 4)).toContainText("SNR");
+  await expect(cell(page, "sd", 4).locator(".depth"), "neue Stimme, Effekt bleibt").toBeVisible();
+  await expect(cell(page, "acid", 3).locator(".depth")).toBeVisible();
+
+  await page.reload();
+  await page.locator('[data-focus-lane="acid"]').first().tap();
+  await expect(fx(3)).toHaveText("DL3");
+  expect(errors).toEqual([]);
+});
+
 test("installs as an app: manifest and icons load, and after one visit it starts offline", async ({ page, context }) => {
   const errors = watchErrors(page);
   await open(page);
@@ -597,6 +644,19 @@ test("renders the starter groove offline with every lane audible and a lean audi
   const breakMix = await page.evaluate(() => window.__track303AudioTest!.render(undefined, 4, {}, { break: true }));
   expect(breakMix.nonFinite).toBe(0);
   expect(breakMix.peak, "303 und Hats laufen im Break weiter").toBeGreaterThan(0.05);
+
+  const loud = await page.evaluate(() => window.__track303AudioTest!.render(["hh"], 2));
+  const ghost = await page.evaluate(() => window.__track303AudioTest!.render(["hh"], 2, {}, { fx: { hh: { type: "VL", value: 1 } } }));
+  expect(ghost.peak / loud.peak, "VL1 spielt die Hats deutlich leiser").toBeLessThan(0.5);
+  const dry = await page.evaluate(() => window.__track303AudioTest!.render(["sd"], 4));
+  const echoed = await page.evaluate(() => window.__track303AudioTest!.render(["sd"], 4, {}, { fx: { sd: { type: "EC", value: 3 } } }));
+  expect(echoed.activeShare, "EC3 lässt die Claps nachhallen").toBeGreaterThan(dry.activeShare * 1.5);
+  for (const type of ["DL", "GT", "FL", "AR"] as const) {
+    const metrics = await page.evaluate((fx) => window.__track303AudioTest!.render(["acid"], 2, {}, { fx: { acid: { type: fx, value: 3 } } }), type);
+    expect(metrics.nonFinite, type).toBe(0);
+    expect(metrics.peak, `${type} bleibt hörbar und unter 0 dBFS`).toBeGreaterThan(0.05);
+    expect(metrics.peak, type).toBeLessThanOrEqual(1);
+  }
 
   const nodes = await page.evaluate(() => window.__track303AudioTest!.countEngineNodes());
   expect(nodes.total).toBeLessThanOrEqual(240);

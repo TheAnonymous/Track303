@@ -29,7 +29,7 @@ export interface DrumKit {
 
 export interface Acid303 {
   /** One note; `glide` slides from the sounding note, `hold` keeps it sounding into the next row. */
-  trigger(midi: number, time: number, options: { accent: boolean; glide: boolean; hold: boolean; seconds: number; velocity: number }): void;
+  trigger(midi: number, time: number, options: { accent: boolean; glide: boolean; hold: boolean; seconds: number; velocity: number; filterKick?: number }): void;
   /** Cutoff and resonance move at once; the other knobs shape the next note. */
   setKnobs(knobs: AcidKnobs): void;
   release(time: number): void;
@@ -164,10 +164,11 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
   follow(knobs, 0.001);
 
   /** Env mod, decay, accent and drive shape each note as it starts. */
-  const shape = (accent: boolean, time: number) => {
+  /** `filterKick` (0–3, the FL effect) opens the envelope further for this note only. */
+  const shape = (accent: boolean, time: number, filterKick: number) => {
     const accentAmount = accent ? current.accent : 0;
     const base = reference * 2 ** (current.cutoff * CUTOFF_OCTAVES);
-    const octaves = recipe.filterOctaves * (0.25 + current.envMod * 1.25) * (1 + (recipe.accent.filterBoost - 1) * accentAmount * 2);
+    const octaves = recipe.filterOctaves * (0.25 + current.envMod * 1.25) * (1 + (recipe.accent.filterBoost - 1) * accentAmount * 2) * (1 + filterKick * 0.3);
     envelope.octaves = Math.max(0.2, Math.min(octaves, Math.log2(16_000 / base)));
     envelope.decay = recipe.filterDecay * 2 ** ((current.decay - 0.5) * 3) * (accent ? recipe.accent.decayMultiplier : 1);
     drive.setAmount(0.02 + current.drive * 0.42 + accentAmount * recipe.accent.saturationBoost, 0.012, time);
@@ -180,7 +181,7 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
       oscillator.frequency.cancelAndHoldAtTime(time);
       if (options.glide && sounding) oscillator.frequency.exponentialRampToValueAtTime(frequency, time + recipe.slidePortamento);
       else oscillator.frequency.setValueAtTime(frequency, time);
-      shape(options.accent, time);
+      shape(options.accent, time, options.filterKick ?? 0);
       if (!options.glide || !sounding) {
         const boost = options.accent ? 1 + (recipe.accent.velocityBoost - 1) + current.accent * 0.25 : 1;
         amp.triggerAttack(time, Math.min(1, options.velocity * boost));

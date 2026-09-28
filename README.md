@@ -17,6 +17,12 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
 - **Daumen-Editor.** Unten liegen die sieben Töne der Tonart (falsche Töne gibt
   es nicht), Oktave, Akzent, Slide, Löschen, Zeilen-Navigation und die
   Schrittweite, um die der Cursor nach jeder Eingabe weiterspringt.
+- **Effektspalte (FX).** Ein Effekt pro Zeile, als Kürzel mit Stufe 1–3 wie
+  im Tracker, im Editor in Klartext: `EC` Echo-Wurf ins Delay, `DL` spielt die
+  Zeile ¼/½/¾ später (Flams, Groove), `VL` leiser (Ghost Notes); für die 303
+  zusätzlich `GT` Notenlänge, `FL` Filter-Kick nur für diese Note und `AR`
+  Arpeggio innerhalb der Zeile (Dreiklang, Quinte, Oktave). Die FX-Taste
+  neben den Noten oder ein Tipp in die FX-Spalte öffnet die Effekt-Tasten.
 - **Gesten.** Tippen wählt, doppelt tippen setzt den letzten Wert der Spur,
   nach links wischen löscht. BPM zieht man mit dem Daumen hoch oder runter.
 - **Klang.** Die Regler der 303 (Cutoff, Resonanz, Env Mod, Decay, Akzent,

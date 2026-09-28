@@ -361,13 +361,13 @@ main {
 }
 
 .head.columns {
-  grid-template-columns: 30px 1.6fr repeat(3, 1fr);
+  grid-template-columns: 30px 1.6fr repeat(4, 1fr);
   font-size: 11px;
   color: var(--dim);
 }
 
 .focus-acid .head.columns {
-  grid-template-columns: 30px 1.6fr repeat(4, 1fr);
+  grid-template-columns: 30px 1.5fr repeat(5, 1fr);
 }
 
 .colhead {
@@ -440,11 +440,11 @@ main {
 }
 
 .focused .line {
-  grid-template-columns: 30px 1.6fr repeat(3, 1fr);
+  grid-template-columns: 30px 1.6fr repeat(4, 1fr);
 }
 
 .focus-acid .line {
-  grid-template-columns: 30px 1.6fr repeat(4, 1fr);
+  grid-template-columns: 30px 1.5fr repeat(5, 1fr);
 }
 
 .line.beat {
@@ -519,6 +519,8 @@ main {
 .focused .cell.col-slide.set .code { color: var(--slide); font-weight: 800; }
 .focused .cell.col-chance.set .code,
 .focused .cell.col-ratchet.set .code { color: var(--text); }
+.focused .cell.col-fx .code { font-size: 13px; }
+.focused .cell.col-fx.set .code { color: var(--slide); font-weight: 700; }
 
 /* Thumb editor */
 
@@ -549,7 +551,81 @@ main {
 }
 
 .pads.notes {
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, 1fr) 0.8fr;
+}
+
+.pads.drums {
+  display: flex;
+}
+
+.pads.drums .pad {
+  flex: 1;
+}
+
+.pads.drums .mode-switch {
+  flex: 0 0 64px;
+}
+
+.pads.fx-pads {
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+}
+
+.pad.mode-switch {
+  color: var(--slide) !important;
+  background: none;
+  border-color: var(--slide);
+  font-size: 14px;
+}
+
+.pad.fx {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+  color: var(--slide) !important;
+}
+
+.pad small {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--dim);
+}
+
+.pad.mode-switch small {
+  color: var(--slide);
+}
+
+.editor .pad.fx.active {
+  background: var(--slide);
+  color: var(--acid-ink) !important;
+}
+
+.pad.fx.active small {
+  color: var(--acid-ink);
+}
+
+.pad.mode-switch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+}
+
+.fx-value[aria-pressed="true"] {
+  background: var(--slide);
+  color: var(--acid-ink);
+  border-color: var(--slide);
+}
+
+.fx-value[aria-pressed="true"] small {
+  color: var(--acid-ink);
+}
+
+.fx-code {
+  margin-left: 0.6em;
+  color: var(--slide);
 }
 
 .pad {

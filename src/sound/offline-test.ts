@@ -1,6 +1,6 @@
 import * as Tone from "tone";
 import { createProject } from "../domain/project";
-import type { Lane, Project } from "../domain/types";
+import type { Fx, Lane, Project } from "../domain/types";
 import { LANES } from "../domain/types";
 import { TrackerEngine } from "./engine";
 
@@ -17,9 +17,16 @@ export interface NodeCount {
   constantSources: number;
 }
 
+export interface RenderOptions {
+  /** Holds the break for the whole render. */
+  break?: boolean;
+  /** Puts this effect on every cell of the lane. */
+  fx?: Partial<Record<Lane, Fx>>;
+}
+
 export interface Track303AudioTestApi {
   /** Renders the starter project, optionally with only some lanes, other knobs or a held break, for `seconds`. */
-  render(lanes?: Lane[], seconds?: number, change?: Partial<Project["knobs"]>, perform?: { break?: boolean }): Promise<RenderMetrics>;
+  render(lanes?: Lane[], seconds?: number, change?: Partial<Project["knobs"]>, perform?: RenderOptions): Promise<RenderMetrics>;
   countEngineNodes(): Promise<NodeCount>;
 }
 
@@ -54,9 +61,12 @@ function metrics(buffer: Tone.ToneAudioBuffer): RenderMetrics {
   return { peak, rmsDb: rms > 0 ? 20 * Math.log10(rms) : -Infinity, activeShare: windows ? active / windows : 0, nonFinite };
 }
 
-async function render(lanes: Lane[] = [...LANES], seconds = 4, change: Partial<Project["knobs"]> = {}, perform: { break?: boolean } = {}): Promise<RenderMetrics> {
+async function render(lanes: Lane[] = [...LANES], seconds = 4, change: Partial<Project["knobs"]> = {}, perform: RenderOptions = {}): Promise<RenderMetrics> {
   const project = createProject();
   project.knobs = { ...project.knobs, ...change };
+  for (const [lane, fx] of Object.entries(perform.fx ?? {}) as [Lane, Fx][]) {
+    for (const cell of project.patterns[0]!.lanes[lane]) if (cell) cell.fx = { ...fx };
+  }
   // The engine lives in the offline context and is dropped with it; disposing it
   // afterwards would reach for the live context's transport.
   const buffer = await Tone.Offline(async () => {

@@ -27,3 +27,11 @@ export function trackerNote(midi: number): string {
 export function scaleNames(root: RootNote, scale: Scale): string[] {
   return SCALE_OFFSETS[scale].map((_, degree) => trackerNote(noteMidi(root, scale, degree, 2)).slice(0, 2).replace("-", ""));
 }
+
+/** A scale step `steps` degrees away, carrying into the next octave (clamped to octaves 1–4). */
+export function shiftDegree(degree: number, octave: number, steps: number): { degree: number; octave: number } {
+  const position = degree + steps;
+  const carried = octave + Math.floor(position / 7);
+  const clamped = Math.max(1, Math.min(4, carried));
+  return { degree: clamped === carried ? ((position % 7) + 7) % 7 : degree, octave: clamped };
+}

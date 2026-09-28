@@ -175,6 +175,11 @@ function clear(lane: Lane, row: number): void {
 }
 
 function toggle(lane: Lane, row: number, column: Exclude<Column, "main">): void {
+  if (column === "fx") {
+    // The effect column opens the editor's effect pads for this row.
+    store.setUi({ editorMode: "fx" });
+    return;
+  }
   if (!pattern.value.lanes[lane][row]) return;
   store.modify((cell) => {
     if (column === "accent") cell.accent = !cell.accent;
@@ -368,7 +373,8 @@ onBeforeUnmount(() => {
           <li><b>Tippen</b> wählt eine Zeile. Die Tasten unten schreiben hinein und springen weiter.</li>
           <li><b>Doppelt tippen</b> setzt den zuletzt geschriebenen Wert der Spur.</li>
           <li><b>Nach links wischen</b> löscht.</li>
-          <li><b>Spurkopf antippen</b> zeigt alle Spalten der Spur: Akzent <code>!</code>, Slide <code>~</code>, Chance und Wiederholungen.</li>
+          <li><b>Spurkopf antippen</b> zeigt alle Spalten der Spur: Akzent <code>!</code>, Slide <code>~</code>, Chance, Wiederholungen und <b>FX</b>.</li>
+          <li><b>FX</b> (Taste neben den Noten oder die FX-Spalte): <code>EC</code> Echo, <code>DL</code> später, <code>VL</code> leiser, bei der 303 auch <code>GT</code> Länge, <code>FL</code> Filter-Kick und <code>AR</code> Arpeggio, jeweils in Stufe 1–3.</li>
           <li><b>BPM</b> ziehst du mit dem Daumen hoch oder runter.</li>
           <li><b>Song</b> reiht Patterns aneinander: Tasten 1–8 schreiben, nach links wischen löscht, „ab hier“ spielt den Song von dort. Oben schaltest du Play zwischen <b>LOOP</b> (das gezeigte Pattern) und <b>SONG</b> um.</li>
           <li><b>Klang</b> hat die Regler der 303, Kits und Tonart.</li>

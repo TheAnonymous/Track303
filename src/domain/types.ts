@@ -17,6 +17,12 @@ export const CHANCES = [1, 0.75, 0.5, 0.25] as const;
 export const RATCHETS = [1, 2, 3, 4] as const;
 export const OCTAVES = [1, 2, 3, 4] as const;
 export const EDIT_STEPS = [0, 1, 2, 4] as const;
+/**
+ * Effect commands, one per row: EC echo throw, DL delay (plays later within
+ * the row), VL volume, GT gate (303 note length), FL filter kick, AR arpeggio.
+ */
+export const FX_TYPES = ["EC", "DL", "VL", "GT", "FL", "AR"] as const;
+export const FX_VALUES = [1, 2, 3] as const;
 export const KITS = ["warehouse", "steel", "rumble"] as const satisfies readonly SoundPresetMap["drums"][];
 export const ACID_VOICES = ["silverbox", "venom", "rubber"] as const satisfies readonly SoundPresetMap["acid"][];
 
@@ -35,6 +41,21 @@ export type Scale = (typeof SCALES)[number];
 export type Kit = (typeof KITS)[number];
 export type AcidVoice = (typeof ACID_VOICES)[number];
 export type EditStep = (typeof EDIT_STEPS)[number];
+export type FxType = (typeof FX_TYPES)[number];
+export type FxValue = (typeof FX_VALUES)[number];
+
+export interface Fx {
+  type: FxType;
+  value: FxValue;
+}
+
+/** Which effects each lane offers; the note-shaping ones only make sense on the 303. */
+export const LANE_FX: Record<Lane, readonly FxType[]> = {
+  bd: ["EC", "DL", "VL"],
+  sd: ["EC", "DL", "VL"],
+  hh: ["EC", "DL", "VL"],
+  acid: ["EC", "DL", "VL", "GT", "FL", "AR"],
+};
 
 export interface DrumCell {
   kind: "drum";
@@ -42,6 +63,8 @@ export interface DrumCell {
   accent: boolean;
   chance: number;
   ratchet: number;
+  /** Stored only when set. */
+  fx?: Fx;
 }
 
 export interface NoteCell {
@@ -53,6 +76,8 @@ export interface NoteCell {
   slide: boolean;
   chance: number;
   ratchet: number;
+  /** Stored only when set. */
+  fx?: Fx;
 }
 
 export type Cell = DrumCell | NoteCell | null;

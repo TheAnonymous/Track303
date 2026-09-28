@@ -1,6 +1,6 @@
 import { shallowRef, type ShallowRef } from "vue";
 import { createProject, emptyPattern, sanitizeProject } from "./domain/project";
-import type { Cell, EditStep, Lane, Pattern, Project, RowCount } from "./domain/types";
+import type { Cell, EditStep, Fx, Lane, Pattern, Project, RowCount } from "./domain/types";
 import { MAX_SONG_LENGTH } from "./domain/types";
 import type { PlayMode } from "./sound/arrangement";
 
@@ -30,6 +30,8 @@ export interface UiState {
   /** Selected song entry; `song.length` is the slot after the last one, where new entries go. */
   songCursor: number;
   playMode: PlayMode;
+  /** What the thumb editor's pads enter: notes (or drum voices) or effects. */
+  editorMode: "notes" | "fx";
 }
 
 export interface Storage {
@@ -58,7 +60,7 @@ export class Track303Store {
     const loaded = this.load();
     this.project = shallowRef(loaded.project);
     this.restoredFromBackup = loaded.fromBackup;
-    this.ui = shallowRef<UiState>({ cursor: { lane: "acid", row: 0 }, focus: null, editStep: 1, view: "pattern", octave: 2, last: {}, songCursor: 0, playMode: "loop" });
+    this.ui = shallowRef<UiState>({ cursor: { lane: "acid", row: 0 }, focus: null, editStep: 1, view: "pattern", octave: 2, last: {}, songCursor: 0, playMode: "loop", editorMode: "notes" });
   }
 
   get pattern() {
@@ -111,6 +113,14 @@ export class Track303Store {
       const cell = project.patterns[project.activePattern]!.lanes[cursor.lane][cursor.row];
       if (cell) change(cell);
     }, mergeKey);
+  }
+
+  /** Sets or changes the effect of the cell under the cursor; `null` removes it. */
+  setFx(fx: Fx | null): void {
+    this.modify((cell) => {
+      if (fx) cell.fx = { ...fx };
+      else delete cell.fx;
+    });
   }
 
   clear(lane = this.ui.value.cursor.lane, row = this.ui.value.cursor.row): void {
