@@ -671,6 +671,25 @@ test("a phone call taking the sound stops playback cleanly and says so", async (
   expect(errors).toEqual([]);
 });
 
+test("on an iPhone the sound is declared as playback, so the silent switch does not mute it", async ({ browser }) => {
+  const iphone = (await import("@playwright/test")).devices["iPhone 15"];
+  const context = await browser.newContext({ userAgent: iphone.userAgent, viewport: iphone.viewport, deviceScaleFactor: iphone.deviceScaleFactor, isMobile: iphone.isMobile, hasTouch: iphone.hasTouch });
+  const page = await context.newPage();
+  const errors = watchErrors(page);
+  // Safari's audio session (iOS 17+); Chromium has none, so the test gives the page one.
+  await page.addInitScript(() => { Object.defineProperty(navigator, "audioSession", { value: { type: "auto" }, configurable: true }); });
+  const sessionType = () => page.evaluate(() => (navigator as Navigator & { audioSession: { type: string } }).audioSession.type);
+  await page.goto("./");
+  await page.locator("[data-help-close]").tap();
+  expect(await sessionType()).toBe("auto");
+  await page.locator("[data-play]").tap();
+  await expect(page.locator("[data-play]")).toHaveAttribute("aria-pressed", "true");
+  expect(await sessionType()).toBe("playback");
+  await page.locator("[data-play]").tap();
+  expect(errors).toEqual([]);
+  await context.close();
+});
+
 test("the sound page switches the 303 between saw and square", async ({ page }) => {
   const errors = watchErrors(page);
   await open(page);

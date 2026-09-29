@@ -8,6 +8,7 @@ import { applyTrackGraphParameters, createMasterGraph, createTrackGraph, setTrac
 import type { TrackMacros } from "./kitty-types";
 import { PerformanceLayer, ROWS_PER_BAR, type PerformanceState } from "./performance-layer";
 import { duckEnvelope, faderGain } from "./polish";
+import { playThroughSilentSwitch } from "./ios-audio";
 import { MasterRecorder, type Recording } from "./recorder";
 import { safeEffectParameters } from "./sound-presets";
 
@@ -305,6 +306,8 @@ export class TrackerEngine {
 
   /** Unlocks audio (call from a tap) and builds the graph once. */
   async prepare(): Promise<Graph> {
+    // Still inside the tap: on an iPhone, keep the silent switch from muting the music.
+    if (this.options.latencyHint) playThroughSilentSwitch();
     if (this.options.latencyHint && !this.ownContext) {
       this.ownContext = new Tone.Context({ latencyHint: this.options.latencyHint });
       // Importing Tone already made a default context; it never started and is closed here.

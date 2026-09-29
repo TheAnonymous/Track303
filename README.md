@@ -69,6 +69,10 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
 - **Song als WAV.** Die Song-Ansicht rendert den ganzen Song einmal durch,
   schneller als Echtzeit (in 2-Sekunden-Stücken wie Kittys Export), mit
   denselben Klängen wie live.
+- **Auch auf dem iPhone.** iOS schaltet Web Audio stumm, solange der
+  Lautlos-Schalter an ist. Track303 meldet seinen Ton beim ersten Tipp als
+  Wiedergabe an (Safari 17+) bzw. lässt auf älteren iPhones ein stummes
+  Audio-Element mitlaufen, so klingt es wie eine Musik-App.
 - **Robust am Handy.** Nimmt ein Anruf oder eine andere App den Ton weg,
   stoppt Track303 sauber und sagt es (eine laufende Aufnahme wird bis dahin
   gesichert). Der Playhead leuchtet, wenn eine Zeile zu hören ist: Die
