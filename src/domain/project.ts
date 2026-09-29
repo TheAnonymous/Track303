@@ -1,4 +1,5 @@
 import type { DrumVoice } from "../sound/kitty-types";
+import { sanitizeAutomation } from "./automation";
 import type { AcidKnobs, Cell, DrumCell, Fx, Lane, NoteCell, Pattern, Project, RowCount } from "./types";
 import {
   ACID_VOICES,
@@ -118,13 +119,16 @@ function sanitizePattern(value: unknown): Pattern {
   const source = record(value);
   const rows = pick(source.rows, ROW_COUNTS, 16);
   const lanes = record(source.lanes);
-  return {
+  const pattern: Pattern = {
     rows,
     lanes: Object.fromEntries(LANES.map((lane) => {
       const cells = Array.isArray(lanes[lane]) ? (lanes[lane] as unknown[]) : [];
       return [lane, Array.from({ length: rows }, (_, row) => sanitizeCell(cells[row], lane))];
     })) as Record<Lane, Cell[]>,
   };
+  const automation = sanitizeAutomation(source.automation, rows);
+  if (automation) pattern.automation = automation;
+  return pattern;
 }
 
 function sanitizeSong(value: unknown): number[] {

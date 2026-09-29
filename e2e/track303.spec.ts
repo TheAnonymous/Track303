@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { devices, expect, test, type Page } from "@playwright/test";
 
 const port = Number.parseInt(process.env.TRACK303_E2E_PORT ?? "4303", 10);
 
@@ -831,6 +831,91 @@ test("in the focus view a thumb drag on a note moves it through the scale", asyn
   expect(errors).toEqual([]);
 });
 
+test("filter ride: recorded under the thumb while playing, played back by itself, undone and cleared", async ({ page }) => {
+  test.setTimeout(60_000);
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator('[data-view="perform"]').tap();
+  await page.locator("[data-ride-arm]").tap();
+  await expect(page.locator("[data-ride-arm]")).toHaveAttribute("aria-pressed", "true");
+  await page.locator("[data-play]").tap();
+  await expect(page.locator(".bar i.now")).toHaveCount(1);
+
+  // One slow sweep from closed to open across about a bar.
+  const xy = (await page.locator("[data-xy]").boundingBox())!;
+  const finger = await hold(page, xy.x + xy.width * 0.05, xy.y + xy.height * 0.5);
+  for (let step = 1; step <= 10; step += 1) {
+    await finger.move(xy.x + xy.width * (0.05 + step * 0.09), xy.y + xy.height * 0.5);
+    await page.waitForTimeout(170);
+  }
+  await finger.lift();
+  await expect(page.locator("[data-ride-clear]"), "the pattern has a ride now").toBeVisible();
+
+  // Hands off: the field keeps moving by itself.
+  const seen = new Set<string>();
+  for (let sample = 0; sample < 14; sample += 1) {
+    seen.add(await page.locator("[data-xy-readout]").innerText());
+    await page.waitForTimeout(140);
+  }
+  expect(seen.size, "the ride moves the filter while nobody touches it").toBeGreaterThan(3);
+  await page.locator("[data-play]").tap();
+
+  await page.locator('[data-view="sound"]').tap();
+  await expect(page.locator('[data-knob="cutoff"] output'), "riding leaves the knob itself alone").toHaveText("42");
+  await page.locator('[data-view="pattern"]').tap();
+  await expect(page.locator("[data-ride-badge]")).toBeVisible();
+  await page.locator('[data-focus-lane="acid"]').first().tap();
+  const rideCells = page.locator('.cell[data-lane="acid"][data-column="ride"].set');
+  const recorded = await rideCells.count();
+  expect(recorded).toBeGreaterThan(4);
+  await rideCells.first().tap();
+  await expect(rideCells).toHaveCount(recorded - 1);
+
+  await page.locator("[data-undo]").tap();
+  await expect(rideCells).toHaveCount(recorded);
+  await page.locator("[data-undo]").tap();
+  await expect(page.locator(".head.columns")).toBeVisible();
+  await expect(rideCells, "one sweep is one undo step").toHaveCount(0);
+  await page.locator("[data-redo]").tap();
+  await page.locator("[data-overview]").tap();
+  await expect(page.locator("[data-ride-badge]")).toBeVisible();
+
+  await page.locator('[data-view="perform"]').tap();
+  await page.locator("[data-ride-clear]").tap();
+  await expect(page.locator("[data-ride-clear]")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("a project shared as a link opens as a new project on another phone", async ({ page, browser }) => {
+  const errors = watchErrors(page);
+  await open(page);
+  await page.locator("[data-pattern-menu]").tap();
+  await page.locator("[data-projects-open]").tap();
+  await page.locator("[data-project-name]").fill("Nachtschicht");
+  await page.locator("[data-project-name]").dispatchEvent("change");
+  await page.locator("[data-project-link]").tap();
+  const link = await page.locator("[data-share-link]").inputValue();
+  expect(link).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/Track303/#p=[A-Za-z0-9_-]+$`));
+
+  const other = await browser.newContext({ ...devices["Pixel 7"] });
+  const friend = await other.newPage();
+  const friendErrors = watchErrors(friend);
+  await friend.addInitScript(() => { Object.defineProperty(navigator, "vibrate", { value: () => true, configurable: true }); });
+  await friend.goto(link);
+  await friend.locator("[data-help-close]").tap().catch(() => undefined);
+  await expect(friend.locator("[data-incoming]")).toContainText("„Nachtschicht“");
+  expect(friend.url(), "the link part leaves the address").not.toContain("#p=");
+  await friend.locator("[data-incoming-open]").tap();
+  await expect(friend.locator(".notice")).toContainText("„Nachtschicht“ ist jetzt ein eigenes Projekt");
+  await expect(friend.locator('.cell[data-lane="bd"][data-row="0"]')).toContainText("KCK!");
+  await friend.locator("[data-pattern-menu]").tap();
+  await friend.locator("[data-projects-open]").tap();
+  await expect(friend.locator(".project-open")).toHaveCount(2);
+  await other.close();
+  expect(errors).toEqual([]);
+  expect(friendErrors).toEqual([]);
+});
+
 test("installs as an app: manifest and icons load, and after one visit it starts offline", async ({ page, context }) => {
   const errors = watchErrors(page);
   await open(page);
@@ -895,6 +980,10 @@ test("renders the starter groove offline with every lane audible and a lean audi
   const dry = await page.evaluate(() => window.__track303AudioTest!.render(["sd"], 4));
   const echoed = await page.evaluate(() => window.__track303AudioTest!.render(["sd"], 4, {}, { fx: { sd: { type: "EC", value: 3 } } }));
   expect(echoed.activeShare, "EC3 lässt die Claps nachhallen").toBeGreaterThan(dry.activeShare * 1.5);
+  const closed = await page.evaluate(() => window.__track303AudioTest!.render(["acid"], 2, { cutoff: 0.1 }));
+  const ridden = await page.evaluate(() => window.__track303AudioTest!.render(["acid"], 2, { cutoff: 0.1 }, { ride: { cutoff: 0.95 } }));
+  expect(ridden.nonFinite).toBe(0);
+  expect(ridden.brightness, "a ride with the filter open sounds brighter than the closed knob").toBeGreaterThan(closed.brightness * 1.3);
   const square = await page.evaluate(() => window.__track303AudioTest!.render(["acid"], 2, { resonance: 1, drive: 1 }, { waveform: "square" }));
   expect(square.nonFinite).toBe(0);
   expect(square.peak, "Rechteck bleibt unter 0 dBFS").toBeLessThanOrEqual(1);

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { storagePersisted } from "../pwa";
+import { shareLink } from "../share";
 import type { Track303Store } from "../store";
 
 const props = defineProps<{ store: Track303Store }>();
@@ -11,6 +12,9 @@ const CONFIRM_MS = 3_000;
 const entries = computed(() => [...props.store.library.value].sort((a, b) => b.updatedAt - a.updatedAt));
 const active = computed(() => props.store.activeEntry);
 const confirmDelete = ref<string | null>(null);
+/** The open project as a link, once "Als Link teilen" was tapped. */
+const link = ref("");
+const canShareLink = typeof navigator.share === "function";
 const fileInput = ref<HTMLInputElement | null>(null);
 let confirmTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -45,6 +49,28 @@ function save(): void {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
   emit("notice", `${fileName} liegt in deinen Downloads.`);
+}
+
+async function makeLink(): Promise<void> {
+  const base = `${window.location.origin}${import.meta.env.BASE_URL}`;
+  link.value = await shareLink(props.store.exportProject().json, base);
+}
+
+async function shareIt(): Promise<void> {
+  try {
+    await navigator.share({ title: `Track303: ${active.value.name}`, text: `Hör dir „${active.value.name}“ in Track303 an:`, url: link.value });
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) emit("notice", "Teilen hat nicht geklappt; kopiere den Link stattdessen.");
+  }
+}
+
+async function copyIt(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(link.value);
+    emit("notice", "Link kopiert. Wer ihn öffnet, bekommt eine eigene Kopie des Tracks.");
+  } catch {
+    emit("notice", "Kopieren ging nicht; halte den Link im Feld gedrückt, um ihn zu kopieren.");
+  }
 }
 
 async function load(event: Event): Promise<void> {
@@ -100,7 +126,17 @@ async function load(event: Event): Promise<void> {
         <button type="button" data-project-duplicate @click="store.duplicateProject(); emit('close')">Duplizieren</button>
         <button type="button" data-project-save @click="save">Als Datei speichern</button>
         <button type="button" data-project-load @click="fileInput?.click()">Datei öffnen …</button>
+        <button type="button" class="share-link" data-project-link @click="makeLink">🔗 Als Link teilen</button>
         <input ref="fileInput" type="file" accept=".json,application/json" hidden data-project-file @change="load" />
+      </div>
+
+      <div v-if="link" class="link-box">
+        <input type="text" readonly :value="link" data-share-link aria-label="Link zum Track" @focus="($event.target as HTMLInputElement).select()" />
+        <div class="link-actions">
+          <button v-if="canShareLink" type="button" data-share-send @click="shareIt">Teilen …</button>
+          <button type="button" data-share-copy @click="copyIt">Kopieren</button>
+        </div>
+        <p class="note">Der Track steckt im Link selbst, nichts wird hochgeladen. Wer ihn öffnet, bekommt eine eigene Kopie.</p>
       </div>
 
       <p class="note">

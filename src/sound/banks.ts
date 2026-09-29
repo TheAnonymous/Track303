@@ -32,6 +32,11 @@ export interface Acid303 {
   trigger(midi: number, time: number, options: { accent: boolean; glide: boolean; hold: boolean; seconds: number; velocity: number; filterKick?: number }): void;
   /** Cutoff and resonance move at once; the other knobs shape the next note. */
   setKnobs(knobs: AcidKnobs): void;
+  /**
+   * One row of a filter ride: cutoff and resonance glide from `from` to
+   * reach these values at `time`; env mod and decay shape the notes from now on.
+   */
+  ride(values: Partial<AcidKnobs>, from: number, time: number): void;
   release(time: number): void;
   dispose(): void;
 }
@@ -165,12 +170,14 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
   let sounding = false;
 
   /** Cutoff and resonance follow the knobs right away, between notes too. */
+  const cents = (cutoff: number) => cutoff * CUTOFF_OCTAVES * 1200;
+  const q = (resonance: number) => 1.2 + resonance * (definition.effects.resonanceBase + definition.effects.resonancePressure);
   const follow = (next: AcidKnobs, timeConstant: number) => {
     const now = output.context.currentTime;
     filter.detune.cancelAndHoldAtTime(now);
-    filter.detune.setTargetAtTime(next.cutoff * CUTOFF_OCTAVES * 1200, now, timeConstant);
+    filter.detune.setTargetAtTime(cents(next.cutoff), now, timeConstant);
     filter.Q.cancelAndHoldAtTime(now);
-    filter.Q.setTargetAtTime(1.2 + next.resonance * (definition.effects.resonanceBase + definition.effects.resonancePressure), now, timeConstant);
+    filter.Q.setTargetAtTime(q(next.resonance), now, timeConstant);
   };
   follow(knobs, 0.001);
 
@@ -209,6 +216,19 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
       const moved = knobs.cutoff !== current.cutoff || knobs.resonance !== current.resonance;
       current = knobs;
       if (moved) follow(knobs, KNOB_SMOOTHING_SECONDS);
+    },
+    ride: (values, from, time) => {
+      const start = Math.max(from, output.context.currentTime);
+      const end = Math.max(time, start + 0.005);
+      if (values.cutoff !== undefined) {
+        filter.detune.cancelAndHoldAtTime(start);
+        filter.detune.linearRampToValueAtTime(cents(values.cutoff), end);
+      }
+      if (values.resonance !== undefined) {
+        filter.Q.cancelAndHoldAtTime(start);
+        filter.Q.linearRampToValueAtTime(q(values.resonance), end);
+      }
+      current = { ...current, ...values };
     },
     release: (time) => {
       amp.triggerRelease(time);

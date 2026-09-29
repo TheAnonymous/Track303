@@ -1,4 +1,5 @@
 import * as Tone from "tone";
+import { AUTO_PARAMS, automationAt, hasAutomation, type AutoParam } from "../domain/automation";
 import { noteMidi, shiftDegree } from "../domain/music";
 import type { AcidKnobs, Cell, DrumCell, FxValue, Lane, NoteCell, Pattern, Project } from "../domain/types";
 import { LANES } from "../domain/types";
@@ -24,6 +25,17 @@ export interface PlayheadEvent {
   row: number;
   /** Lanes that sounded on this row. */
   triggered: Lane[];
+  /** The 303 knobs as they sound on this row (ride and thumb included). */
+  knobs: AcidKnobs;
+}
+
+/** One row of a filter ride captured while playing. */
+export interface RideEvent {
+  pattern: number;
+  row: number;
+  values: Partial<AcidKnobs>;
+  /** Numbers the thumb gestures, so each gesture is one undo step. */
+  pass: number;
 }
 
 const DRUM_MACROS: TrackMacros = { color: 0.55, pressure: 0.55, space: 0.12, motion: 0.2, density: 0.6 };
@@ -81,6 +93,13 @@ export class TrackerEngine {
   private ownContext: Tone.Context | null = null;
   /** 303 knobs under a thumb right now, ahead of the saved project. */
   private liveKnobs: AcidKnobs | null = null;
+  /** Which of those knobs the thumb is actually moving. */
+  private readonly touched = new Set<AutoParam>();
+  private ridePass = 0;
+  private rideRecording = false;
+  /** Whether the previous row played a ride, so the knobs glide back when it ends. */
+  private riding = false;
+  private readonly rideListeners = new Set<(event: RideEvent) => void>();
   private readonly performance = new PerformanceLayer();
   private readonly playheadListeners = new Set<(event: PlayheadEvent) => void>();
   private readonly statusListeners = new Set<(status: EngineStatus) => void>();
@@ -162,6 +181,9 @@ export class TrackerEngine {
     this.graph?.kit.release(now);
     this.graph?.acid303.release(now);
     this.acidHeld = false;
+    // A ride stops where it is; the filter goes back to the knobs for previews and the next start.
+    if (this.riding) this.graph?.acid303.setKnobs({ ...this.project.knobs });
+    this.riding = false;
     if (this.performance.settle()) this.graph?.master.performance.endRise(Tone.immediate());
     this.emitPerformance();
     this.emitStatus("idle");
@@ -254,13 +276,31 @@ export class TrackerEngine {
     this.graph?.master.performance.setFilter(value);
   }
 
-  /** Plays knob moves under a thumb at once; `null` hands back to the saved project. */
-  setLiveKnobs(knobs: AcidKnobs | null): void {
+  /**
+   * Plays knob moves under a thumb at once; `touched` names the knobs the
+   * thumb moves (they are recorded when riding); `null` hands back to the
+   * saved project and its ride.
+   */
+  setLiveKnobs(knobs: AcidKnobs | null, touched: readonly AutoParam[] = []): void {
+    if (knobs && !this.liveKnobs) this.ridePass += 1;
     this.liveKnobs = knobs;
+    if (!knobs) this.touched.clear();
+    for (const param of touched) this.touched.add(param);
     if (knobs) this.graph?.acid303.setKnobs(knobs);
   }
 
+  /** While on, thumb moves in the live view are written into the playing pattern, row by row. */
+  setRideRecording(on: boolean): void {
+    this.rideRecording = on;
+  }
+
+  onRide(listener: (event: RideEvent) => void): () => void {
+    this.rideListeners.add(listener);
+    return () => this.rideListeners.delete(listener);
+  }
+
   syncProject(project: Project): void {
+    const knobsChanged = JSON.stringify(this.project.knobs) !== JSON.stringify(project.knobs);
     this.project = structuredClone(project);
     if (!this.playing) this.pattern = project.activePattern;
     const graph = this.graph;
@@ -278,7 +318,8 @@ export class TrackerEngine {
       graph.acidPreset = project.acidVoice;
       graph.acidWaveform = project.waveform;
     }
-    graph.acid303.setKnobs(this.liveKnobs ?? project.knobs);
+    // Only a real knob change moves the filter here; rides are scheduled row by row.
+    if (knobsChanged && !this.liveKnobs) graph.acid303.setKnobs(project.knobs);
     applyTrackGraphParameters(graph.acid, "acid", project.acidVoice, acidMacros(project.knobs), 0.08);
   }
 
@@ -390,6 +431,7 @@ export class TrackerEngine {
       if (changed) Tone.getDraw().schedule(() => this.emitPerformance(), time + this.outputDelay());
     }
     this.step += 1;
+    const knobs = this.rideRow(graph, pattern, row, time);
     const triggered = LANES.filter((lane) => this.playCell(graph, pattern, lane, row, time));
     if (!triggered.includes("acid") && this.acidHeld) {
       // A held (slid-into) note whose follower did not play ends here.
@@ -399,7 +441,7 @@ export class TrackerEngine {
     const current = this.pattern;
     const songIndex = this.songIndex;
     Tone.getDraw().schedule(() => {
-      for (const listener of this.playheadListeners) listener({ pattern: current, songIndex, row, triggered });
+      for (const listener of this.playheadListeners) listener({ pattern: current, songIndex, row, triggered, knobs });
     }, time + this.outputDelay());
     this.row += 1;
     if (this.row >= pattern.rows) {
@@ -463,6 +505,31 @@ export class TrackerEngine {
     const gate = fx?.type === "GT" ? GATE[fx.value] : 0.55;
     graph.acid303.trigger(midi, time, { accent: cell.accent, glide: cell.slide && this.acidHeld, hold, seconds: sixteenth * gate, velocity, filterKick });
     this.acidHeld = hold;
+  }
+
+  /**
+   * The filter ride on one row: records what the thumb moves (when riding is
+   * on), plays the pattern's ride for everything else, and glides back to the
+   * knobs when a ridden pattern gives way to one without. Returns the knobs
+   * as they sound on the row.
+   */
+  private rideRow(graph: Graph, pattern: Pattern, row: number, time: number): AcidKnobs {
+    const live = this.liveKnobs;
+    const base = this.project.knobs;
+    if (live && this.touched.size && this.rideRecording) {
+      const values = Object.fromEntries([...this.touched].map((param) => [param, live[param]])) as Partial<AcidKnobs>;
+      const event: RideEvent = { pattern: this.pattern, row, values, pass: this.ridePass };
+      for (const listener of this.rideListeners) listener(event);
+    }
+    const ridden = hasAutomation(pattern);
+    const ride = ridden ? automationAt(pattern, row) : {};
+    if (ridden || this.riding) {
+      const targets = Object.fromEntries(AUTO_PARAMS.filter((param) => !this.touched.has(param)).map((param) => [param, ride[param] ?? base[param]])) as Partial<AcidKnobs>;
+      graph.acid303.ride(targets, time - 15 / this.project.tempo, time);
+    }
+    this.riding = ridden;
+    const touchedValues = live ? Object.fromEntries([...this.touched].map((param) => [param, live[param]])) : {};
+    return { ...base, ...ride, ...touchedValues };
   }
 
   /** Opens the strip's delay send for one row, so that hit echoes on (a dub-style throw). */

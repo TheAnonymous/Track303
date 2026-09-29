@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { hasAutomation, type AutoParam } from "../domain/automation";
 import type { AcidKnobs, Lane } from "../domain/types";
 import { LANES } from "../domain/types";
 import { clock, LANE_LABELS, LANE_NAMES } from "../format";
@@ -16,8 +17,12 @@ const props = defineProps<{
   lit: readonly Lane[];
   recording: boolean;
   recordingSeconds: number;
+  /** Filter ride recording is armed. */
+  rideArmed: boolean;
+  /** The knobs as the playing row sounds them (ride included), or `null` when stopped. */
+  playKnobs: AcidKnobs | null;
 }>();
-const emit = defineEmits<{ record: [] }>();
+const emit = defineEmits<{ record: []; rideToggle: []; rideClear: [] }>();
 
 const KEY_STEP = 0.02;
 // The drag surfaces cancel their touches' default (`@touchstart.prevent`): pointer
@@ -25,7 +30,8 @@ const KEY_STEP = 0.02;
 
 /** Knobs under a thumb; saved as one undo step when the thumb lets go. */
 const draft = ref<AcidKnobs | null>(null);
-const knobs = computed(() => draft.value ?? props.store.project.value.knobs);
+const knobs = computed(() => draft.value ?? props.playKnobs ?? props.store.project.value.knobs);
+const ridden = computed(() => hasAutomation(props.store.pattern));
 const filter = ref(0);
 const beat = computed(() => props.playRow === null ? null : props.playRow % ROWS_PER_BAR);
 
@@ -44,13 +50,18 @@ function round(value: number): number {
 
 function live(change: Partial<AcidKnobs>): void {
   draft.value = { ...knobs.value, ...change };
-  props.engine.setLiveKnobs(draft.value);
+  props.engine.setLiveKnobs(draft.value, Object.keys(change) as AutoParam[]);
 }
 
+/**
+ * The thumb lets go. Riding while the music plays, the moves went into the
+ * pattern's ride and the knobs stay as they were; otherwise the knobs keep
+ * the new position (one undo step).
+ */
 function commit(): void {
   const settled = draft.value;
   if (!settled) return;
-  props.store.edit((project) => { project.knobs = { ...settled }; });
+  if (!(props.rideArmed && props.engine.playing)) props.store.edit((project) => { project.knobs = { ...settled }; });
   draft.value = null;
   props.engine.setLiveKnobs(null);
 }
@@ -192,6 +203,10 @@ const breakLabel = computed(() => {
       <span class="axis x" aria-hidden="true">Cutoff →</span>
       <span class="axis y" aria-hidden="true">↑ Resonanz</span>
       <output class="readout" data-xy-readout>{{ Math.round(knobs.cutoff * 100) }} · {{ Math.round(knobs.resonance * 100) }}</output>
+      <div class="ride" @pointerdown.stop @touchstart.stop>
+        <button type="button" class="ride-arm" :aria-pressed="rideArmed" data-ride-arm aria-label="Filterfahrt aufnehmen" @click="emit('rideToggle')"><i aria-hidden="true"></i>Fahrt</button>
+        <button v-if="ridden" type="button" class="ride-clear" data-ride-clear aria-label="Fahrt dieses Patterns löschen" @click="emit('rideClear')">✕</button>
+      </div>
     </div>
 
     <label class="slider" data-live-knob="envMod">

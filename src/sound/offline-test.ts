@@ -1,5 +1,6 @@
 import * as Tone from "tone";
 import { createProject } from "../domain/project";
+import { AUTO_PARAMS, type AutoParam } from "../domain/automation";
 import type { Fx, Lane, Project, Waveform } from "../domain/types";
 import { LANES } from "../domain/types";
 import { TrackerEngine } from "./engine";
@@ -9,6 +10,8 @@ export interface RenderMetrics {
   rmsDb: number;
   /** Share of 10 ms windows louder than -60 dBFS. */
   activeShare: number;
+  /** Mean sample-to-sample change over mean level: rises with the high frequencies (a brighter filter). */
+  brightness: number;
   nonFinite: number;
 }
 
@@ -23,6 +26,8 @@ export interface RenderOptions {
   /** Puts this effect on every cell of the lane. */
   fx?: Partial<Record<Lane, Fx>>;
   waveform?: Waveform;
+  /** A filter ride holding these knob values on every row of the first pattern. */
+  ride?: Partial<Record<AutoParam, number>>;
 }
 
 export interface Track303AudioTestApi {
@@ -41,6 +46,8 @@ function metrics(buffer: Tone.ToneAudioBuffer): RenderMetrics {
   let nonFinite = 0;
   let active = 0;
   let windows = 0;
+  let change = 0;
+  let level = 0;
   for (let start = 0; start < buffer.length; start += window) {
     let windowSum = 0;
     const end = Math.min(buffer.length, start + window);
@@ -53,6 +60,8 @@ function metrics(buffer: Tone.ToneAudioBuffer): RenderMetrics {
         }
         peak = Math.max(peak, Math.abs(sample));
         windowSum += sample * sample;
+        level += Math.abs(sample);
+        if (index > 0) change += Math.abs(sample - (data[index - 1] ?? 0));
       }
     }
     sum += windowSum;
@@ -61,13 +70,20 @@ function metrics(buffer: Tone.ToneAudioBuffer): RenderMetrics {
     windows += 1;
   }
   const rms = Math.sqrt(sum / (buffer.length * channels.length));
-  return { peak, rmsDb: rms > 0 ? 20 * Math.log10(rms) : -Infinity, activeShare: windows ? active / windows : 0, nonFinite };
+  return { peak, rmsDb: rms > 0 ? 20 * Math.log10(rms) : -Infinity, activeShare: windows ? active / windows : 0, nonFinite, brightness: level > 0 ? change / level : 0 };
 }
 
 async function render(lanes: Lane[] = [...LANES], seconds = 4, change: Partial<Project["knobs"]> = {}, perform: RenderOptions = {}): Promise<RenderMetrics> {
   const project = createProject();
   project.knobs = { ...project.knobs, ...change };
   if (perform.waveform) project.waveform = perform.waveform;
+  if (perform.ride) {
+    const pattern = project.patterns[0]!;
+    pattern.automation = Object.fromEntries(AUTO_PARAMS.flatMap((param) => {
+      const value = perform.ride?.[param];
+      return value === undefined ? [] : [[param, Array.from({ length: pattern.rows }, () => value)]];
+    }));
+  }
   for (const [lane, fx] of Object.entries(perform.fx ?? {}) as [Lane, Fx][]) {
     for (const cell of project.patterns[0]!.lanes[lane]) if (cell) cell.fx = { ...fx };
   }

@@ -14,12 +14,14 @@ import type { Cell, Lane, RowCount } from "./domain/types";
 import { CHANCES, MAX_TEMPO, MIN_TEMPO, PATTERN_COUNT, RATCHETS, ROW_COUNTS } from "./domain/types";
 import { clock } from "./format";
 import type { PlayMode } from "./sound/arrangement";
+import type { AcidKnobs } from "./domain/types";
 import { TrackerEngine, type EngineStatus, type PerformanceState } from "./sound/engine";
 import { MAX_RECORDING_SECONDS } from "./sound/recorder";
 import { renderSong } from "./sound/render";
 import { audibleRange, encodePcm16Wav, encodeWav, trimmedLength } from "./sound/wav";
 import { Track303Store } from "./store";
 import { applyUpdate, install, installable, updateReady } from "./pwa";
+import { sharedFile, sharedName } from "./share";
 import { PlaybackWakeLock } from "./wake-lock";
 
 const HELP_SEEN_KEY = "track303.help.seen";
@@ -43,8 +45,38 @@ let recordingTimer: ReturnType<typeof setInterval> | undefined;
 const queued = ref<number | null>(null);
 const lit = shallowRef<readonly Lane[]>([]);
 const performance = shallowRef<PerformanceState>(engine.performanceState);
+const rideArmed = ref(false);
+const playKnobs = shallowRef<AcidKnobs | null>(null);
 const menuOpen = ref(false);
 const projectsOpen = ref(false);
+/** A track someone shared by link, waiting for "Öffnen". */
+const incoming = shallowRef<{ json: string; name: string } | null>(null);
+
+/** A shared link opens as a question, never by itself; the link part is removed from the address either way. */
+async function checkSharedLink(): Promise<void> {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#p=")) return;
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+  try {
+    const json = await sharedFile(hash);
+    if (json) incoming.value = { json, name: sharedName(json) };
+  } catch (error) {
+    notice.value = error instanceof Error ? error.message : "Der Link ließ sich nicht öffnen.";
+  }
+}
+
+function acceptShared(): void {
+  const shared = incoming.value;
+  incoming.value = null;
+  if (!shared) return;
+  try {
+    if (engine.playing) engine.stop();
+    store.importProject(shared.json, "");
+    notice.value = `„${store.activeEntry.name}“ ist jetzt ein eigenes Projekt auf diesem Handy.`;
+  } catch (error) {
+    notice.value = error instanceof Error ? error.message : "Der Track ließ sich nicht öffnen.";
+  }
+}
 const helpOpen = ref(!readFlag(HELP_SEEN_KEY));
 const notice = ref(store.restoredFromBackup ? "Der letzte Stand war beschädigt, die Sicherung davor ist geladen." : "");
 
@@ -61,12 +93,22 @@ const stopPlayhead = engine.onPlayhead((event) => {
   playingPattern.value = event.pattern;
   playEntry.value = event.songIndex;
   playRow.value = event.row;
+  playKnobs.value = event.knobs;
   queued.value = engine.queuedPattern;
   lit.value = event.triggered;
 });
 const stopPerformance = engine.onPerformance((state) => {
   performance.value = state;
 });
+// Thumb moves while riding become the playing pattern's filter ride.
+const stopRide = engine.onRide((event) => store.recordAutomation(event.pattern, event.row, event.values, event.pass));
+
+function toggleRide(): void {
+  rideArmed.value = !rideArmed.value;
+  engine.setRideRecording(rideArmed.value);
+  navigator.vibrate?.(10);
+  if (rideArmed.value && !engine.playing) notice.value = "Fahrt ist scharf: starte Play und zieh im Feld, die Bewegung landet im laufenden Pattern.";
+}
 const stopStatus = engine.onStatus((next) => {
   status.value = next;
   wakeLock.playing = next === "playing";
@@ -81,6 +123,7 @@ const stopStatus = engine.onStatus((next) => {
     playingPattern.value = null;
     playEntry.value = null;
     playRow.value = null;
+    playKnobs.value = null;
     queued.value = null;
     lit.value = [];
   }
@@ -233,6 +276,11 @@ function toggle(lane: Lane, row: number, column: Exclude<Column, "main">): void 
     store.setUi({ editorMode: "fx" });
     return;
   }
+  if (column === "ride") {
+    // A tap on the ride column clears the filter ride on that row.
+    store.clearRide(row);
+    return;
+  }
   if (!pattern.value.lanes[lane][row]) return;
   store.modify((cell) => {
     if (column === "accent") cell.accent = !cell.accent;
@@ -310,13 +358,17 @@ function writeFlag(key: string): void {
   }
 }
 
-onMounted(() => window.addEventListener("keydown", keydown));
+onMounted(() => {
+  window.addEventListener("keydown", keydown);
+  void checkSharedLink();
+});
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", keydown);
   clearInterval(recordingTimer);
   discardTake();
   stopPlayhead();
   stopPerformance();
+  stopRide();
   stopStatus();
   wakeLock.playing = false;
   engine.dispose();
@@ -419,7 +471,11 @@ onBeforeUnmount(() => {
         :lit="lit"
         :recording="recording"
         :recording-seconds="recordingSeconds"
+        :ride-armed="rideArmed"
+        :play-knobs="playKnobs"
         @record="toggleRecording"
+        @ride-toggle="toggleRide"
+        @ride-clear="store.clearRide()"
       />
     </main>
 
@@ -436,6 +492,15 @@ onBeforeUnmount(() => {
     <RecordingSheet v-if="take" :take="take" @close="discardTake" @listen="engine.playing && engine.stop()" />
     <ProjectsSheet v-if="projectsOpen" :store="store" @close="projectsOpen = false" @notice="(text) => notice = text" />
 
+    <div v-if="incoming" class="help" role="dialog" aria-modal="true" aria-labelledby="incoming-title" data-incoming>
+      <div class="sheet">
+        <h2 id="incoming-title">Geteilter Track</h2>
+        <p>Jemand hat dir <b>„{{ incoming.name }}“</b> geschickt. Öffnest du ihn, wird er ein eigenes Projekt auf diesem Handy; deine Projekte bleiben, wie sie sind.</p>
+        <button type="button" class="primary" data-incoming-open @click="acceptShared">Als neues Projekt öffnen</button>
+        <button type="button" class="take-close" data-incoming-skip @click="incoming = null">Nicht jetzt</button>
+      </div>
+    </div>
+
     <div v-if="helpOpen" class="help" role="dialog" aria-modal="true" aria-labelledby="help-title">
       <div class="sheet">
         <h2 id="help-title">Track303</h2>
@@ -451,9 +516,9 @@ onBeforeUnmount(() => {
           <li><b>BPM</b> ziehst du mit dem Daumen hoch oder runter.</li>
           <li><b>Song</b> reiht Patterns aneinander: Tasten 1–8 schreiben, nach links wischen löscht, „ab hier“ spielt den Song von dort. Oben schaltest du Play zwischen <b>LOOP</b> (das gezeigte Pattern) und <b>SONG</b> um.</li>
           <li><b>Klang</b> hat die Regler der 303, Kits und Tonart.</li>
-          <li><b>Live</b> ist zum Spielen: Im Feld ziehst du Cutoff (quer) und Resonanz (hoch), der DJ-Filter federt zurück, Mutes schalten am nächsten Takt, <b>Break</b> halten nimmt die Kick raus, loslassen bringt den Drop. <b>REC</b> nimmt auf, was du hörst; danach kannst du es anhören, speichern oder teilen.</li>
+          <li><b>Live</b> ist zum Spielen: Im Feld ziehst du Cutoff (quer) und Resonanz (hoch), der DJ-Filter federt zurück, Mutes schalten am nächsten Takt, <b>Break</b> halten nimmt die Kick raus, loslassen bringt den Drop. <b>REC</b> nimmt auf, was du hörst; danach kannst du es anhören, speichern oder teilen. Mit <b>● Fahrt</b> (im Filter-Feld) landen deine Filter-Bewegungen im laufenden Pattern und spielen danach von selbst; <b>✕</b> löscht sie, die Spalte <b>FLT</b> im 303-Fokus zeigt sie.</li>
         </ul>
-        <p><b>⋯</b> hat außerdem deine <b>Projekte</b> (neu, umbenennen, als Datei sichern und öffnen) und <b>🎲 Würfeln</b> für eine neue 303-Linie oder neue Drums. In der Song-Ansicht wird der ganze Song mit <b>⤓ Als WAV</b> zur Audiodatei.</p>
+        <p><b>⋯</b> hat außerdem deine <b>Projekte</b> (neu, umbenennen, als Datei sichern und öffnen, <b>als Link teilen</b>) und <b>🎲 Würfeln</b> für eine neue 303-Linie oder neue Drums. In der Song-Ansicht wird der ganze Song mit <b>⤓ Als WAV</b> zur Audiodatei.</p>
         <p>Alles wird bei jeder Änderung auf diesem Handy gespeichert. Diese Hilfe findest du wieder unter <b>⋯</b>.</p>
         <button type="button" class="primary" data-help-close @click="closeHelp">Los geht's</button>
       </div>

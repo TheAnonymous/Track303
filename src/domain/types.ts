@@ -1,4 +1,5 @@
 import type { DrumVoice, SoundPresetMap } from "../sound/kitty-types";
+import type { Automation } from "./automation";
 
 export const SCHEMA_VERSION = 1 as const;
 export const LANES = ["bd", "sd", "hh", "acid"] as const;
@@ -91,6 +92,8 @@ export type Cell = DrumCell | NoteCell | null;
 export interface Pattern {
   rows: RowCount;
   lanes: Record<Lane, Cell[]>;
+  /** A recorded filter ride for the 303 (stored only when used). */
+  automation?: Automation;
 }
 
 /** The TB-303's own controls, 0–1 each, plus the room around it. */

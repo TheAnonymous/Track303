@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { automationAt, hasAutomation } from "../domain/automation";
 import type { Cell, Lane, Pattern, Project } from "../domain/types";
 import { LANES } from "../domain/types";
 import { cellCode, cellDescription, cellFlags, chanceCode, fxCode, hasDepth, LANE_LABELS, LANE_NAMES, ratchetCode, rowLabel } from "../format";
 import { horizontalSwipeGuard } from "../horizontal-swipe";
 import type { Cursor, Selection } from "../store";
 
-export type Column = "main" | "accent" | "slide" | "chance" | "ratchet" | "fx";
+export type Column = "main" | "accent" | "slide" | "chance" | "ratchet" | "fx" | "ride";
 
 const props = defineProps<{
   project: Project;
@@ -41,8 +42,17 @@ const NUDGE_PX = 18;
 const FOLLOW_PAUSE_MS = 3_000;
 
 const rows = computed(() => Array.from({ length: props.pattern.rows }, (_, row) => row));
-const columns = computed<Column[]>(() => props.focus === "acid" ? ["main", "accent", "slide", "chance", "ratchet", "fx"] : ["main", "accent", "chance", "ratchet", "fx"]);
-const COLUMN_LABELS: Record<Column, string> = { main: "Note", accent: "Akz", slide: "Sld", chance: "Chn", ratchet: "Wdh", fx: "FX" };
+const columns = computed<Column[]>(() => props.focus === "acid" ? ["main", "accent", "slide", "chance", "ratchet", "fx", "ride"] : ["main", "accent", "chance", "ratchet", "fx"]);
+const COLUMN_LABELS: Record<Column, string> = { main: "Note", accent: "Akz", slide: "Sld", chance: "Chn", ratchet: "Wdh", fx: "FX", ride: "FLT" };
+const ridden = computed(() => hasAutomation(props.pattern));
+/** Eight bar heights for the cutoff of a filter ride, as a tracker draws a value. */
+const BARS = "▁▂▃▄▅▆▇█";
+
+function rideText(row: number): string {
+  const values = automationAt(props.pattern, row);
+  if (values.cutoff !== undefined) return BARS[Math.min(7, Math.floor(values.cutoff * 8))]!;
+  return Object.keys(values).length ? "•" : "·";
+}
 
 function cellAt(lane: Lane, row: number): Cell {
   return props.pattern.lanes[lane][row] ?? null;
@@ -57,10 +67,12 @@ function columnText(lane: Lane, row: number, column: Column): string {
     case "chance": return chanceCode(cell);
     case "ratchet": return ratchetCode(cell);
     case "fx": return fxCode(cell);
+    case "ride": return rideText(row);
   }
 }
 
 function columnSet(lane: Lane, row: number, column: Column): boolean {
+  if (column === "ride") return Object.keys(automationAt(props.pattern, row)).length > 0;
   const cell = cellAt(lane, row);
   if (!cell) return false;
   switch (column) {
@@ -187,7 +199,7 @@ watch(() => props.playRow, (row) => { if (row !== null) reveal(row, false); });
     <div v-if="!focus" class="head">
       <span class="rownum" aria-hidden="true"></span>
       <button v-for="lane in LANES" :key="lane" type="button" class="lanehead" :class="[lane, { lit: lit.includes(lane) }]" :data-focus-lane="lane" :aria-label="`${LANE_NAMES[lane]} aufzoomen`" @click="emit('focus', lane)">
-        <i class="led" aria-hidden="true"></i>{{ LANE_LABELS[lane] }}
+        <i class="led" aria-hidden="true"></i>{{ LANE_LABELS[lane] }}<small v-if="lane === 'acid' && ridden" class="ride-badge" data-ride-badge>FLT</small>
       </button>
     </div>
     <template v-else>

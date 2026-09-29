@@ -48,6 +48,14 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
   Break → Drop: Halten nimmt die Kick raus und lässt einen Hochpass über zwei
   Takte steigen, Loslassen bringt den Drop am nächsten Takt. Eine Geste im
   Filter-Feld ist ein Rückgängig-Schritt.
+- **Filterfahrten.** „● Fahrt“ im Filter-Feld schaltet die Aufnahme scharf:
+  Während die Musik läuft, landen Cutoff, Resonanz, Env Mod und Decay unter
+  dem Daumen Zeile für Zeile im gerade spielenden Pattern (die Regler selbst
+  bleiben stehen). Danach spielt die Fahrt von selbst, stufenlos von Zeile zu
+  Zeile gerampt, auch im Song und im WAV-Export; der Daumen gewinnt immer.
+  Eine Geste ist ein Rückgängig-Schritt; „✕“ löscht die Fahrt des Patterns,
+  die Spalte FLT im 303-Fokus zeigt sie als Balken (ein Tipp löscht die
+  Zeile), und die Bereichs-Werkzeuge nehmen sie mit.
 - **Patterns.** Acht Patterns mit 16 oder 32 Zeilen. Während der Wiedergabe
   im Loop wechselt ein angetipptes Pattern am Ende des laufenden.
 - **Song.** Die Song-Liste reiht Patterns aneinander (bis zu 64 Einträge): Die
@@ -62,7 +70,10 @@ Backend, Samples oder externe Requests. Zielgerät ist Chrome auf Android.
 - **Ansichten.** Muster, Song, Klang und Live liegen unten unter dem Daumen.
 - **Projekte.** Beliebig viele Projekte (⋯ → Projekt): neu mit Start-Groove
   oder leer, umbenennen, duplizieren, löschen, als `.track303.json`-Datei
-  sichern und auf einem anderen Handy wieder öffnen. Jede Änderung landet
+  sichern und auf einem anderen Handy wieder öffnen, oder als Link teilen:
+  Das Projekt steckt komprimiert hinter `#p=` im Link, der Teil nach `#`
+  erreicht nie den Server; wer den Link öffnet, wird gefragt und bekommt eine
+  eigene Kopie als neues Projekt. Jede Änderung landet
   sofort im `localStorage`, mit der vorherigen Fassung als Sicherung; die App
   bittet Chrome, den Speicher dauerhaft zu behalten. Rückgängig/Wiederholen
   gilt für die laufende Sitzung.

@@ -1,8 +1,9 @@
 import { shallowRef, type ShallowRef } from "vue";
+import { AUTO_PARAMS, clearAutomation, writeAutomation, type Automation } from "./domain/automation";
 import { randomAcidLine, randomDrums, type Random } from "./domain/generate";
 import { shiftDegree } from "./domain/music";
 import { createProject, drum, emptyPattern, note, sanitizeProject } from "./domain/project";
-import type { Cell, EditStep, Fx, Lane, Pattern, Project, RowCount } from "./domain/types";
+import type { AcidKnobs, Cell, EditStep, Fx, Lane, Pattern, Project, RowCount } from "./domain/types";
 import { LANE_VOICES, LANES, MAX_SONG_LENGTH } from "./domain/types";
 import type { PlayMode } from "./sound/arrangement";
 
@@ -109,8 +110,8 @@ export class Track303Store {
   restoredFromBackup: boolean;
   private clipboard: Pattern | null = null;
   readonly hasClipboard = shallowRef(false);
-  /** Copied block: one column of cells per lane, left to right. */
-  private block: { lanes: Lane[]; cells: Cell[][] } | null = null;
+  /** Copied block: one column of cells per lane, left to right, plus the 303's ride on those rows. */
+  private block: { lanes: Lane[]; cells: Cell[][]; automation: Automation | null } | null = null;
   readonly hasBlock = shallowRef(false);
   private undoStack: Project[] = [];
   private redoStack: Project[] = [];
@@ -343,7 +344,11 @@ export class Track303Store {
     const selection = this.ui.value.selection;
     if (!selection) return;
     const [from, to] = selection.rows;
-    this.block = { lanes: this.selectedLanes, cells: this.selectedLanes.map((lane) => structuredClone(this.pattern.lanes[lane].slice(from, to + 1))) };
+    const ride = this.pattern.automation;
+    const automation: Automation | null = this.selectedLanes.includes("acid") && ride
+      ? Object.fromEntries(AUTO_PARAMS.flatMap((param) => (ride[param] ? [[param, ride[param].slice(from, to + 1)]] : [])))
+      : null;
+    this.block = { lanes: this.selectedLanes, cells: this.selectedLanes.map((lane) => structuredClone(this.pattern.lanes[lane].slice(from, to + 1))), automation };
     this.hasBlock.value = true;
   }
 
@@ -362,6 +367,18 @@ export class Track303Store {
         column.forEach((cell, row) => {
           if (startRow + row < pattern.rows && (!cell || (cell.kind === "note") === (lane === "acid"))) pattern.lanes[lane][startRow + row] = structuredClone(cell);
         });
+        // The 303's ride travels with its notes.
+        if (lane === "acid" && block.lanes[offset] === "acid" && block.automation) {
+          const length = column.length;
+          clearAutomation(pattern, startRow, Math.min(pattern.rows, startRow + length) - 1);
+          for (let row = 0; row < length && startRow + row < pattern.rows; row += 1) {
+            const values = Object.fromEntries(AUTO_PARAMS.flatMap((param) => {
+              const value = block.automation?.[param]?.[row];
+              return value === null || value === undefined ? [] : [[param, value]];
+            })) as Partial<AcidKnobs>;
+            writeAutomation(pattern, startRow + row, values);
+          }
+        }
       });
     });
     // The pasted block stays marked, ready to be shifted or transposed.
@@ -371,7 +388,7 @@ export class Track303Store {
   }
 
   clearSelectionCells(): void {
-    this.editSelection((cells) => cells.map(() => null));
+    this.editSelection((cells) => cells.map(() => null), (pattern, from, to) => clearAutomation(pattern, from, to));
   }
 
   /** Moves the 303 notes in the block by scale steps (7 is an octave). */
@@ -381,7 +398,33 @@ export class Track303Store {
 
   /** Rotates the block's rows by one: -1 moves everything up, 1 down, the edge row wraps around. */
   shiftSelection(direction: -1 | 1): void {
-    this.editSelection((cells) => (direction === 1 ? [cells[cells.length - 1]!, ...cells.slice(0, -1)] : [...cells.slice(1), cells[0]!]));
+    const rotate = <T>(values: T[]): T[] => (direction === 1 ? [values[values.length - 1]!, ...values.slice(0, -1)] : [...values.slice(1), values[0]!]);
+    this.editSelection(rotate, (pattern, from, to) => {
+      for (const param of AUTO_PARAMS) {
+        const values = pattern.automation?.[param];
+        if (values) values.splice(from, to - from + 1, ...rotate(values.slice(from, to + 1)));
+      }
+    });
+  }
+
+  /**
+   * Writes one row of a filter ride into a pattern while the music plays.
+   * `pass` numbers the thumb gestures: each gesture is one undo step.
+   */
+  recordAutomation(patternIndex: number, row: number, values: Partial<AcidKnobs>, pass: number): void {
+    this.edit((project) => {
+      const pattern = project.patterns[patternIndex];
+      if (pattern && row < pattern.rows) writeAutomation(pattern, row, values);
+    }, `ride:${pass}`);
+  }
+
+  /** Removes the shown pattern's ride, or one row of it. */
+  clearRide(row?: number): void {
+    this.edit((project) => {
+      const pattern = project.patterns[project.activePattern]!;
+      if (row === undefined) clearAutomation(pattern);
+      else clearAutomation(pattern, row, row);
+    });
   }
 
   /** Writes each lane's last value (or its default) on the rows the shape picks, and clears the others. */
@@ -405,7 +448,8 @@ export class Track303Store {
     }, `nudge:${gesture}:${lane}:${row}`);
   }
 
-  private editSelection(change: (cells: Cell[], lane: Lane) => Cell[]): void {
+  /** Changes the selected cells; `ride` also changes the 303's ride on those rows when the 303 lane is selected. */
+  private editSelection(change: (cells: Cell[], lane: Lane) => Cell[], ride?: (pattern: Pattern, from: number, to: number) => void): void {
     const selection = this.ui.value.selection;
     if (!selection) return;
     const [from, to] = selection.rows;
@@ -416,6 +460,7 @@ export class Track303Store {
         const updated = change(pattern.lanes[lane].slice(from, to + 1), lane);
         pattern.lanes[lane].splice(from, updated.length, ...updated);
       }
+      if (ride && lanes.includes("acid")) ride(pattern, from, to);
     });
   }
 
@@ -439,10 +484,11 @@ export class Track303Store {
   setRows(rows: RowCount): void {
     this.edit((project) => {
       const pattern = project.patterns[project.activePattern]!;
-      for (const cells of Object.values(pattern.lanes)) {
-        const source = [...cells];
-        cells.length = 0;
-        for (let row = 0; row < rows; row += 1) cells.push(structuredClone(source[row % source.length] ?? null));
+      const refit = <T>(values: T[]): T[] => Array.from({ length: rows }, (_, row) => structuredClone(values[row % values.length]!));
+      for (const cells of Object.values(pattern.lanes)) cells.splice(0, cells.length, ...refit(cells));
+      for (const param of AUTO_PARAMS) {
+        const values = pattern.automation?.[param];
+        if (values) pattern.automation![param] = refit(values);
       }
       pattern.rows = rows;
     });
