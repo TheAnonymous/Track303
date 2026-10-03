@@ -69,27 +69,32 @@ interface DelayTap {
   panner: Panner | null;
 }
 
-function createDelayTap(input: Gain, output: Gain, seconds: number, gainValue: number, pan: number | null): DelayTap {
+function createDelayTap(seconds: number, gainValue: number, pan: number | null): DelayTap {
   const delay = new Delay(seconds, seconds + 0.1);
   const gain = new Gain(gainValue);
   const panner = pan === null ? null : new Panner(pan);
-  input.chain(delay, gain);
-  if (panner) gain.chain(panner, output);
-  else gain.connect(output);
+  delay.connect(gain);
+  if (panner) gain.connect(panner);
   return { delay, gain, panner };
+}
+
+/** The taps are the effect's ports: the send feeds every tap and the next node sums them (unity in/out gains cost two nodes). */
+function tapPorts(taps: readonly DelayTap[]): { input: Delay[]; output: (Gain | Panner)[] } {
+  return { input: taps.map((tap) => tap.delay), output: taps.map((tap) => tap.panner ?? tap.gain) };
 }
 
 export class WarehouseDelay extends SoundNode {
   readonly name = "WarehouseDelay";
-  readonly input = new Gain(1);
-  readonly output = new Gain(1);
+  readonly input: readonly Delay[];
+  readonly output: readonly (Gain | Panner)[];
   private readonly taps: DelayTap[];
 
   constructor(delayTime: number | string, stereo: boolean, feedback: number) {
     super();
     const seconds = toSeconds(delayTime);
     const pans = stereo ? [-0.64, 0.64, -0.36, 0.36] : [null, null, null, null];
-    this.taps = [1, 2, 3, 4].map((multiple, index) => createDelayTap(this.input, this.output, seconds * multiple, index === 0 ? 0.72 : 0, pans[index]!));
+    this.taps = [1, 2, 3, 4].map((multiple, index) => createDelayTap(seconds * multiple, index === 0 ? 0.72 : 0, pans[index]!));
+    ({ input: this.input, output: this.output } = tapPorts(this.taps));
     this.setFeedback(feedback, 0.001);
   }
 
@@ -108,8 +113,8 @@ export class WarehouseDelay extends SoundNode {
 
 export class WarehouseReverb extends SoundNode {
   readonly name = "WarehouseReverb";
-  readonly input = new Gain(1);
-  readonly output = new Gain(1);
+  readonly input: readonly Delay[];
+  readonly output: readonly (Gain | Panner)[];
   private readonly taps: DelayTap[];
 
   constructor(decay: number, preDelay: number) {
@@ -120,8 +125,9 @@ export class WarehouseReverb extends SoundNode {
     this.taps = ratios.map((ratio, index) => {
       const seconds = preDelay + safeDecay * ratio;
       const gain = 0.43 * Math.exp(-(seconds - preDelay) / (safeDecay * 0.55));
-      return createDelayTap(this.input, this.output, seconds, gain, pans[index]!);
+      return createDelayTap(seconds, gain, pans[index]!);
     });
+    ({ input: this.input, output: this.output } = tapPorts(this.taps));
   }
 
   override dispose(): this {
@@ -132,14 +138,13 @@ export class WarehouseReverb extends SoundNode {
 }
 
 export interface MasterGraph {
-  input: Gain;
+  input: SoundNode;
   performance: PerformanceFilter;
   fader: Gain;
   nodes: SoundNode[];
 }
 
 export function createMasterGraph(destination: AudioNode | SoundNode, volume: number, meter?: AudioNode): MasterGraph {
-  const input = new Gain(1);
   const performance = new PerformanceFilter();
   const highpass = new LeanFilter({ type: "highpass", frequency: MASTER_GRAPH_RECIPE.highpass, rolloff: -24 });
   const eq = new LeanEq3(MASTER_GRAPH_RECIPE.eq);
@@ -148,10 +153,10 @@ export function createMasterGraph(destination: AudioNode | SoundNode, volume: nu
   clipper.setAmount(MASTER_GRAPH_RECIPE.saturation.amount, 0.001);
   const limiter = new Limiter(MASTER_GRAPH_RECIPE.limiterDb);
   const fader = new Gain(faderGain(volume));
-  input.chain(performance, highpass, eq, compressor, clipper, limiter, fader);
+  performance.chain(highpass, eq, compressor, clipper, limiter, fader);
   if (meter) fader.chain(meter, destination);
   else fader.connect(destination);
-  return { input, performance, fader, nodes: [input, performance, highpass, eq, compressor, clipper, limiter, fader] };
+  return { input: performance, performance, fader, nodes: [performance, highpass, eq, compressor, clipper, limiter, fader] };
 }
 
 export interface TrackGraph {
@@ -163,7 +168,6 @@ export interface TrackGraph {
   filter: LeanFilter;
   saturator: CharacterSaturator;
   compressor: Compressor;
-  dry: Gain;
   delaySend: Gain;
   delay: WarehouseDelay;
   delayHighpass: LeanFilter;
@@ -172,7 +176,6 @@ export interface TrackGraph {
   reverb: WarehouseReverb;
   reverbHighpass: LeanFilter;
   reverbLowpass: LeanFilter;
-  sum: Gain;
   widener: LeanStereoWidener | null;
   duck: Gain;
   gain: Gain;
@@ -212,7 +215,6 @@ export function createTrackGraph(
   const saturator = new CharacterSaturator(channel.saturationCurve);
   saturator.setAmount(parameters.saturation, 0.001);
   const compressor = new Compressor({ threshold: parameters.threshold, ratio: parameters.ratio, ...channel.compressor });
-  const dry = new Gain(1);
   const delaySend = new Gain(parameters.delayWet);
   const delay = new WarehouseDelay(DELAY_TIMES[track], channel.delayReturn.stereo, parameters.feedback);
   const delayHighpass = new LeanFilter({ type: "highpass", frequency: channel.delayReturn.highpass, rolloff: -24 });
@@ -221,29 +223,30 @@ export function createTrackGraph(
   const reverb = new WarehouseReverb(REVERBS[track].decay, REVERBS[track].preDelay);
   const reverbHighpass = new LeanFilter({ type: "highpass", frequency: channel.reverbReturn.highpass, rolloff: -24 });
   const reverbLowpass = new LeanFilter({ type: "lowpass", frequency: channel.reverbReturn.lowpass, rolloff: -12 });
-  const sum = new Gain(1);
   const widener = track === "drums" || track === "acid" ? null : new LeanStereoWidener(channel.stereo.base + normalized(macros.motion) * channel.stereo.motion);
   const duck = new Gain(1);
+  // The dry signal and both returns are summed by the duck itself; before the widener (its splitter mixes
+  // discretely, a mono input would stay left) a unity gain still sums them.
+  const sum = widener ? new Gain(1) : duck;
   const gain = new Gain(volume * dbToGain(channel.outputTrimDb));
 
   input.chain(highpass, eq, filter, saturator, compressor);
-  compressor.connect(dry);
+  compressor.connect(sum);
   compressor.connect(delaySend);
   compressor.connect(reverbSend);
-  dry.connect(sum);
   delaySend.chain(delay, delayHighpass, delayLowpass, sum);
   reverbSend.chain(reverb, reverbHighpass, reverbLowpass, sum);
   if (widener) sum.chain(widener, duck, gain);
-  else sum.chain(duck, gain);
+  else duck.connect(gain);
   if (meter) gain.chain(meter, destination);
   else gain.connect(destination);
 
   const nodes: SoundNode[] = [
-    input, highpass, eq, filter, saturator, compressor, dry, delaySend, delay, delayHighpass, delayLowpass,
-    reverbSend, reverb, reverbHighpass, reverbLowpass, sum, duck, gain,
+    input, highpass, eq, filter, saturator, compressor, delaySend, delay, delayHighpass, delayLowpass,
+    reverbSend, reverb, reverbHighpass, reverbLowpass, duck, gain,
   ];
-  if (widener) nodes.push(widener);
-  const graph = { baseVolume: volume, outputTrimGain: dbToGain(channel.outputTrimDb), input, highpass, eq, filter, saturator, compressor, dry, delaySend, delay, delayHighpass, delayLowpass, reverbSend, reverb, reverbHighpass, reverbLowpass, sum, widener, duck, gain, ready: Promise.resolve(), nodes };
+  if (widener) nodes.push(sum, widener);
+  const graph = { baseVolume: volume, outputTrimGain: dbToGain(channel.outputTrimDb), input, highpass, eq, filter, saturator, compressor, delaySend, delay, delayHighpass, delayLowpass, reverbSend, reverb, reverbHighpass, reverbLowpass, widener, duck, gain, ready: Promise.resolve(), nodes };
   applyTrackGraphParameters(graph, track, preset, macros, 0.001);
   return graph;
 }

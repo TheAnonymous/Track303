@@ -20,7 +20,7 @@
     "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run test:e2e"
   },
   "dependencies": {
-    "klangwerk": "github:TheAnonymous/Klangwerk#10d872f900b8a54fe60c3d63687d1ea545848032",
+    "klangwerk": "github:TheAnonymous/Klangwerk#bfd31d4a203bf9aca240eb1a1260bdad6620edd2",
     "vue": "3.5.39"
   },
   "devDependencies": {
