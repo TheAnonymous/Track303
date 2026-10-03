@@ -111,28 +111,49 @@ export class WarehouseDelay extends SoundNode {
   }
 }
 
+/** The taps the warehouse reverb had before 2026-10-04; the four it keeps carry their energy. */
+const FORMER_TAP_RATIOS = [0.012, 0.029, 0.061, 0.113, 0.207, 0.371, 0.641, 0.91];
+
+/**
+ * Four of those taps, early to late on alternating sides, the taps of each
+ * side through one panner at the side's mean position: 10 nodes instead of 24
+ * (Jodie's pick after listening, 2026-10-04; about 15 % less load in Kitty).
+ */
+const REVERB_TAPS = [
+  { ratio: 0.012, pan: -0.2 },
+  { ratio: 0.113, pan: 0.42 },
+  { ratio: 0.207, pan: -0.31 },
+  { ratio: 0.91, pan: 0.48 },
+];
+
 export class WarehouseReverb extends SoundNode {
   readonly name = "WarehouseReverb";
   readonly input: readonly Delay[];
-  readonly output: readonly (Gain | Panner)[];
+  readonly output: readonly Panner[];
   private readonly taps: DelayTap[];
 
   constructor(decay: number, preDelay: number) {
     super();
     const safeDecay = Math.max(0.4, Math.min(4, decay));
-    const ratios = [0.012, 0.029, 0.061, 0.113, 0.207, 0.371, 0.641, 0.91];
-    const pans = [-0.2, 0.24, -0.46, 0.42, -0.31, 0.34, -0.5, 0.48];
-    this.taps = ratios.map((ratio, index) => {
-      const seconds = preDelay + safeDecay * ratio;
-      const gain = 0.43 * Math.exp(-(seconds - preDelay) / (safeDecay * 0.55));
-      return createDelayTap(seconds, gain, pans[index]!);
+    const level = (ratio: number) => 0.43 * Math.exp(-(safeDecay * ratio) / (safeDecay * 0.55));
+    const energy = (ratios: readonly number[]) => ratios.reduce((sum, ratio) => sum + level(ratio) * level(ratio), 0);
+    const scale = Math.sqrt(energy(FORMER_TAP_RATIOS) / energy(REVERB_TAPS.map((tap) => tap.ratio)));
+    const mean = (pans: readonly number[]) => pans.reduce((sum, pan) => sum + pan, 0) / pans.length;
+    const left = new Panner(mean(REVERB_TAPS.map((tap) => tap.pan).filter((pan) => pan < 0)));
+    const right = new Panner(mean(REVERB_TAPS.map((tap) => tap.pan).filter((pan) => pan > 0)));
+    this.taps = REVERB_TAPS.map(({ ratio, pan }) => {
+      const tap = createDelayTap(preDelay + safeDecay * ratio, level(ratio) * scale, null);
+      tap.gain.connect(pan < 0 ? left : right);
+      return tap;
     });
-    ({ input: this.input, output: this.output } = tapPorts(this.taps));
+    this.input = this.taps.map((tap) => tap.delay);
+    this.output = [left, right];
   }
 
   override dispose(): this {
     super.dispose();
-    this.taps.forEach(({ delay, gain, panner }) => { delay.dispose(); gain.dispose(); panner?.dispose(); });
+    this.taps.forEach(({ delay, gain }) => { delay.dispose(); gain.dispose(); });
+    this.output.forEach((panner) => panner.dispose());
     return this;
   }
 }
