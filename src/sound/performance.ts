@@ -1,4 +1,5 @@
-import * as Tone from "tone";
+import type { Param } from "klangwerk";
+import { param, SoundNode } from "klangwerk/tone";
 
 /**
  * The master's live filter: a DJ-style lowpass/highpass on one bipolar value
@@ -7,14 +8,14 @@ import * as Tone from "tone";
  * through (measured: within float rounding, below −130 dB), so renders and
  * exports sound exactly as without it.
  */
-export class PerformanceFilter extends Tone.ToneAudioNode {
+export class PerformanceFilter extends SoundNode {
   readonly name = "PerformanceFilter";
   readonly input: GainNode;
   readonly output: BiquadFilterNode;
   private readonly lowpass: BiquadFilterNode;
   private readonly highpass: BiquadFilterNode;
   private readonly rise: BiquadFilterNode;
-  private readonly riseFrequency: Tone.Param<"frequency">;
+  private readonly riseFrequency: Param;
   private snapTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
@@ -27,14 +28,14 @@ export class PerformanceFilter extends Tone.ToneAudioNode {
     this.lowpass.connect(this.highpass);
     this.highpass.connect(this.rise);
     this.output = this.rise;
-    this.riseFrequency = new Tone.Param({ context: this.context, param: this.rise.frequency, units: "frequency", convert: true } as never);
+    this.riseFrequency = param(this.rise.frequency, "frequency");
     this.riseFrequency.setValueAtTime(0, 0);
   }
 
   /** −1 closes the lowpass down to 110 Hz, +1 opens the highpass up to 2.8 kHz, 0 is neutral. */
   setFilter(value: number): void {
     const amount = Math.max(-1, Math.min(1, value));
-    // Under a thumb the filter reacts at once, not after Tone's scheduling look-ahead.
+    // Under a thumb the filter reacts at once, not after the scheduling look-ahead.
     const time = this.immediate();
     const lowpass = amount < -0.005 ? 18_000 * (110 / 18_000) ** -amount : this.context.sampleRate / 2;
     const highpass = amount > 0.005 ? 25 * (2_800 / 25) ** amount : 0;
@@ -72,7 +73,6 @@ export class PerformanceFilter extends Tone.ToneAudioNode {
   dispose(): this {
     super.dispose();
     if (this.snapTimer !== null) clearTimeout(this.snapTimer);
-    this.riseFrequency.dispose();
     this.input.disconnect();
     this.lowpass.disconnect();
     this.highpass.disconnect();

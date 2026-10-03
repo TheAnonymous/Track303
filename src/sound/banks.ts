@@ -1,9 +1,9 @@
-import * as Tone from "tone";
+import { currentTime, FrequencyEnvelope, Gain, midiFrequency, Noise, Panner, SoundNode, toFrequency, toSeconds } from "klangwerk/tone";
 import type { AcidKnobs, AcidVoice, Kit, Waveform } from "../domain/types";
 import type { DrumVoice } from "./kitty-types";
 import { CharacterSaturator } from "./graph";
-import { LeanFilter, SleepyOutput } from "./lean";
-import { LeanEnvelope, LeanTone, OneShotTone, type BasicWave } from "./lean-voices";
+import { LeanFilter, SleepyOutput } from "klangwerk/tone";
+import { LeanEnvelope, LeanTone, OneShotTone, type BasicWave } from "klangwerk/tone";
 import { performanceOffsetSeconds } from "./polish";
 import { presetDefinition } from "./sound-presets";
 
@@ -41,14 +41,14 @@ export interface Acid303 {
   dispose(): void;
 }
 
-export function createDrumKit(preset: Kit, destination: Tone.ToneAudioNode, alwaysAwake: boolean): DrumKit {
+export function createDrumKit(preset: Kit, destination: SoundNode, alwaysAwake: boolean): DrumKit {
   const definition = presetDefinition("drums", preset);
   const recipe = definition.synthesis;
-  const output = new Tone.Gain(definition.level);
+  const output = new Gain(definition.level);
   const sleep = new SleepyOutput(output, destination, alwaysAwake);
   const panScale = preset === "steel" ? 2.15 : preset === "rumble" ? 0.42 : 1;
   const strip = (filter: LeanFilter, pan: number) => {
-    const panner = new Tone.Panner(pan * panScale).connect(output);
+    const panner = new Panner(pan * panScale).connect(output);
     filter.connect(panner);
     return panner;
   };
@@ -71,7 +71,7 @@ export function createDrumKit(preset: Kit, destination: Tone.ToneAudioNode, alwa
     envelope: { attack: 0.001, decay: recipe.tom.decay, sustain: 0, release: 0.13, attackCurve: "exponential" },
   }).connect(tomFilter);
   // One shared noise source feeds independent envelopes, as in Kitty.
-  const noise = new Tone.Noise(recipe.snare.noise).start();
+  const noise = new Noise(recipe.snare.noise).start();
   const snareNoise = new LeanEnvelope({ attack: 0.001, decay: recipe.snare.decay, sustain: 0, release: 0.07 }).connect(snareFilter);
   const clapNoises = Array.from({ length: 3 }, () => new LeanEnvelope({ attack: 0.001, decay: recipe.clap.decay, sustain: 0, release: 0.04 }).connect(clapFilter));
   const closedHat = new LeanEnvelope({ attack: 0.001, decay: recipe.hats.closedDecay, sustain: 0, release: Math.max(0.025, recipe.hats.closedDecay * 0.45) }).connect(closedHatFilter);
@@ -93,12 +93,12 @@ export function createDrumKit(preset: Kit, destination: Tone.ToneAudioNode, alwa
           pitch: { octaves: 1.6, pitchDecay: 0.018 },
           envelope: { attack: 0.003, decay: subTail.decay, sustain: 0, release: subTail.release, attackCurve: "exponential" },
         }).connect(highpass);
-        return { voice, nodes: [voice, highpass, lowpass, saturator] as Tone.ToneAudioNode[] };
+        return { voice, nodes: [voice, highpass, lowpass, saturator] as SoundNode[] };
       })()
     : null;
-  const hertz = (note: Tone.Unit.Frequency) => Tone.Frequency(note).toFrequency();
-  const seconds = (time: Tone.Unit.Time) => Tone.Time(time).toSeconds();
-  const nodes: Tone.ToneAudioNode[] = [kick, snareBody, tom, noise, snareNoise, ...clapNoises, closedHat, openHat, transient, snareFilter, clapFilter, closedHatFilter, openHatFilter, tomFilter, ...panners, output, ...(subChain?.nodes ?? [])];
+  const hertz = toFrequency;
+  const seconds = toSeconds;
+  const nodes: SoundNode[] = [kick, snareBody, tom, noise, snareNoise, ...clapNoises, closedHat, openHat, transient, snareFilter, clapFilter, closedHatFilter, openHatFilter, tomFilter, ...panners, output, ...(subChain?.nodes ?? [])];
   return {
     trigger: (voice, time, velocity, long = false) => {
       sleep.wake(time, time + DRUM_TAIL_SECONDS);
@@ -140,11 +140,11 @@ const WAVEFORM_TRIM: Record<Waveform, Record<Waveform, number>> = {
   square: { sawtooth: 1.45, square: 1 },
 };
 
-export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: Tone.ToneAudioNode, alwaysAwake: boolean, waveform?: Waveform): Acid303 {
+export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: SoundNode, alwaysAwake: boolean, waveform?: Waveform): Acid303 {
   const definition = presetDefinition("acid", preset);
   const recipe = definition.synthesis;
   const wave = waveform ?? recipe.oscillator;
-  const output = new Tone.Gain(definition.level * WAVEFORM_TRIM[recipe.oscillator][wave]);
+  const output = new Gain(definition.level * WAVEFORM_TRIM[recipe.oscillator][wave]);
   const sleep = new SleepyOutput(output, destination, alwaysAwake);
   const amp = new LeanEnvelope(definition.envelope).connect(output);
   const drive = new CharacterSaturator(definition.channel.saturationCurve);
@@ -154,7 +154,7 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
   // shifts the whole filter through detune, so it moves continuously and at
   // once, also in the middle of a note.
   const reference = recipe.filterBase / 2;
-  const envelope = new Tone.FrequencyEnvelope({
+  const envelope = new FrequencyEnvelope({
     attack: 0.002,
     decay: recipe.filterDecay,
     sustain: recipe.filterSustain,
@@ -173,7 +173,7 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
   const cents = (cutoff: number) => cutoff * CUTOFF_OCTAVES * 1200;
   const q = (resonance: number) => 1.2 + resonance * (definition.effects.resonanceBase + definition.effects.resonancePressure);
   const follow = (next: AcidKnobs, timeConstant: number) => {
-    const now = output.context.currentTime;
+    const now = currentTime();
     filter.detune.cancelAndHoldAtTime(now);
     filter.detune.setTargetAtTime(cents(next.cutoff), now, timeConstant);
     filter.Q.cancelAndHoldAtTime(now);
@@ -195,7 +195,7 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
   return {
     trigger: (midi, time, options) => {
       sleep.wake(time, time + options.seconds + definition.envelope.release + SLEEP_MARGIN_SECONDS);
-      const frequency = Tone.Frequency(midi, "midi").toFrequency();
+      const frequency = midiFrequency(midi);
       oscillator.frequency.cancelAndHoldAtTime(time);
       if (options.glide && sounding) oscillator.frequency.exponentialRampToValueAtTime(frequency, time + recipe.slidePortamento);
       else oscillator.frequency.setValueAtTime(frequency, time);
@@ -218,7 +218,7 @@ export function createAcid303(preset: AcidVoice, knobs: AcidKnobs, destination: 
       if (moved) follow(knobs, KNOB_SMOOTHING_SECONDS);
     },
     ride: (values, from, time) => {
-      const start = Math.max(from, output.context.currentTime);
+      const start = Math.max(from, currentTime());
       const end = Math.max(time, start + 0.005);
       if (values.cutoff !== undefined) {
         filter.detune.cancelAndHoldAtTime(start);

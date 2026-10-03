@@ -1,9 +1,9 @@
-import * as Tone from "tone";
 import { createProject } from "../domain/project";
 import { AUTO_PARAMS, type AutoParam } from "../domain/automation";
 import type { Fx, Lane, Project, Waveform } from "../domain/types";
 import { LANES } from "../domain/types";
 import { TrackerEngine } from "./engine";
+import { soundContext, swapSound, useContext } from "klangwerk/tone";
 
 export interface RenderMetrics {
   peak: number;
@@ -38,7 +38,7 @@ export interface Track303AudioTestApi {
   interruptLiveAudio(): Promise<void>;
 }
 
-function metrics(buffer: Tone.ToneAudioBuffer): RenderMetrics {
+function metrics(buffer: AudioBuffer): RenderMetrics {
   const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
   const window = Math.round(buffer.sampleRate * 0.01);
   let peak = 0;
@@ -87,15 +87,20 @@ async function render(lanes: Lane[] = [...LANES], seconds = 4, change: Partial<P
   for (const [lane, fx] of Object.entries(perform.fx ?? {}) as [Lane, Fx][]) {
     for (const cell of project.patterns[0]!.lanes[lane]) if (cell) cell.fx = { ...fx };
   }
-  // The engine lives in the offline context and is dropped with it; disposing it
-  // afterwards would reach for the live context's transport.
-  const buffer = await Tone.Offline(async () => {
+  // Everything is scheduled before the render starts (as Tone.Offline did); the
+  // engine lives in the offline context and is dropped with it.
+  const context = new OfflineAudioContext(2, seconds * 44_100, 44_100);
+  const previous = useContext(context);
+  try {
     const engine = new TrackerEngine(project, { offline: true });
     for (const lane of LANES) engine.setMuted(lane, !lanes.includes(lane));
     await engine.start();
     if (perform.break) engine.setBreak(true);
-  }, seconds, 2, 44_100);
-  return metrics(buffer);
+    engine.renderUntil(seconds);
+  } finally {
+    swapSound(previous);
+  }
+  return metrics(await context.startRendering());
 }
 
 /**
@@ -113,14 +118,13 @@ async function countEngineNodes(): Promise<NodeCount> {
       return create(...args);
     };
   }
-  const original = Tone.getContext();
-  Tone.setContext(new Tone.OfflineContext(native as never));
+  const previous = useContext(native);
   const engine = new TrackerEngine(createProject());
   try {
     await engine.prepare();
   } finally {
     engine.dispose();
-    Tone.setContext(original);
+    swapSound(previous);
   }
   return { total: Object.values(counts).reduce((sum, count) => sum + count, 0), constantSources: counts.createConstantSource ?? 0 };
 }
@@ -129,7 +133,7 @@ export function installAudioTestApi(): void {
   window.__track303AudioTest = {
     render,
     countEngineNodes,
-    interruptLiveAudio: () => (Tone.getContext().rawContext as AudioContext).suspend(),
+    interruptLiveAudio: () => (soundContext() as AudioContext).suspend(),
   };
   document.documentElement.dataset.audioTest = "ready";
 }

@@ -1,4 +1,4 @@
-import * as Tone from "tone";
+import { Cues, MasterRecorder, playThroughSilentSwitch, Transport, type Recording } from "klangwerk";
 import { AUTO_PARAMS, automationAt, hasAutomation, type AutoParam } from "../domain/automation";
 import { noteMidi, shiftDegree } from "../domain/music";
 import type { AcidKnobs, Cell, DrumCell, FxValue, Lane, NoteCell, Pattern, Project } from "../domain/types";
@@ -9,8 +9,7 @@ import { applyTrackGraphParameters, createMasterGraph, createTrackGraph, setTrac
 import type { TrackMacros } from "./kitty-types";
 import { PerformanceLayer, ROWS_PER_BAR, type PerformanceState } from "./performance-layer";
 import { duckEnvelope, faderGain } from "./polish";
-import { playThroughSilentSwitch } from "./ios-audio";
-import { MasterRecorder, type Recording } from "./recorder";
+import { atStep, currentSound, now, setBpm, swapSound, useContext, type Sound } from "klangwerk/tone";
 import { safeEffectParameters } from "./sound-presets";
 
 export type { PerformanceState } from "./performance-layer";
@@ -50,9 +49,8 @@ const ARPEGGIOS: Record<FxValue, readonly number[]> = { 1: [0, 2, 4], 2: [0, 4, 
 const STRIP_GAINS = { drums: 0.88, acid: 0.8 } as const;
 
 /** Whether scheduled sound will be heard: the live context runs, or an offline render is being prepared. */
-function audible(): boolean {
-  const context = Tone.getContext();
-  return context instanceof Tone.OfflineContext || context.state === "running";
+function audible(context: BaseAudioContext): boolean {
+  return context instanceof OfflineAudioContext || context.state === "running";
 }
 
 function acidMacros(knobs: AcidKnobs): TrackMacros {
@@ -79,7 +77,8 @@ export class TrackerEngine {
   private project: Project;
   private graph: Graph | null = null;
   private graphReady: Promise<Graph> | null = null;
-  private scheduleId: number | null = null;
+  /** Rows an offline render still plays (`null` live). */
+  private offlineSteps: number | null = null;
   private row = 0;
   private pattern = 0;
   private queued: number | null = null;
@@ -90,7 +89,17 @@ export class TrackerEngine {
   private acidHeld = false;
   /** Rows since start, for bar lines. */
   private step = 0;
-  private ownContext: Tone.Context | null = null;
+  private ownContext: AudioContext | null = null;
+  /** The context this engine plays in, with its tempo (made current while it builds or schedules). */
+  private sound: Sound | null = null;
+  private readonly transport = new Transport({
+    step: (_step, time) => this.withSound(() => atStep(this.transport.nextTime, () => this.tick(time))),
+    stepDuration: () => (60 / this.project.tempo) / 4,
+    // Tone's swing on sixteenths: the odd ones lean back by swing · 2/3 of a sixteenth.
+    swing: () => (this.project.swing * 2) / 3,
+    lookahead: 0.1,
+  });
+  private cues: Cues | null = null;
   /** 303 knobs under a thumb right now, ahead of the saved project. */
   private liveKnobs: AcidKnobs | null = null;
   /** Which of those knobs the thumb is actually moving. */
@@ -115,7 +124,7 @@ export class TrackerEngine {
   }
 
   get playing(): boolean {
-    return this.scheduleId !== null;
+    return this.transport.running;
   }
 
   get queuedPattern(): number | null {
@@ -146,14 +155,12 @@ export class TrackerEngine {
     this.emitStatus("starting");
     try {
       await this.prepare();
-      if (!audible()) {
+      const context = this.context;
+      if (!audible(context)) {
         this.emitStatus("suspended");
         return;
       }
-      const transport = Tone.getTransport();
-      transport.stop();
-      transport.cancel();
-      transport.position = 0;
+      this.transport.halt();
       this.applyTiming();
       this.row = 0;
       this.step = 0;
@@ -162,8 +169,8 @@ export class TrackerEngine {
       this.songIndex = position.songIndex;
       this.queued = null;
       this.acidHeld = false;
-      this.scheduleId = transport.scheduleRepeat((time) => this.tick(time), "16n");
-      transport.start("+0.05");
+      // The first steps are scheduled by the clock's next beat (as Tone's transport does), after what the caller sets right after start (a held break).
+      this.transport.begin(context, this.withSound(now) + 0.05);
       this.emitStatus("playing");
     } catch (error) {
       this.emitStatus("error");
@@ -172,19 +179,24 @@ export class TrackerEngine {
   }
 
   stop(): void {
-    const transport = Tone.getTransport();
-    transport.stop();
-    if (this.scheduleId !== null) transport.clear(this.scheduleId);
-    this.scheduleId = null;
+    this.transport.halt();
+    this.cues?.cancel();
     this.queued = null;
-    const now = Tone.now();
-    this.graph?.kit.release(now);
-    this.graph?.acid303.release(now);
+    const graph = this.sound ? this.graph : null;
+    if (graph) {
+      this.withSound(() => {
+        const at = now();
+        graph.kit.release(at);
+        graph.acid303.release(at);
+        // A ride stops where it is; the filter goes back to the knobs for previews and the next start.
+        if (this.riding) graph.acid303.setKnobs({ ...this.project.knobs });
+        if (this.performance.settle()) graph.master.performance.endRise(this.context.currentTime);
+      });
+    } else {
+      this.performance.settle();
+    }
     this.acidHeld = false;
-    // A ride stops where it is; the filter goes back to the knobs for previews and the next start.
-    if (this.riding) this.graph?.acid303.setKnobs({ ...this.project.knobs });
     this.riding = false;
-    if (this.performance.settle()) this.graph?.master.performance.endRise(Tone.immediate());
     this.emitPerformance();
     this.emitStatus("idle");
   }
@@ -218,7 +230,8 @@ export class TrackerEngine {
    * rows of the song from its first entry at time 0, for a WAV render.
    */
   async scheduleOffline(steps: number): Promise<void> {
-    await this.createGraph();
+    this.sound = currentSound();
+    await this.withSound(() => this.createGraph());
     this.mode = "song";
     this.songStart = 0;
     const position = startPosition(this.arrangement, this.project.activePattern);
@@ -226,19 +239,21 @@ export class TrackerEngine {
     this.songIndex = position.songIndex;
     this.row = 0;
     this.step = 0;
-    let remaining = steps;
-    this.scheduleId = Tone.getTransport().scheduleRepeat((time) => {
-      if (remaining <= 0) return;
-      remaining -= 1;
-      this.tick(time);
-    }, "16n", 0);
+    this.offlineSteps = steps;
+    this.withSound(() => this.applyTiming());
+    this.transport.begin(this.context, 0);
+  }
+
+  /** Schedules an offline render up to `seconds` (see `scheduleOffline`). */
+  renderUntil(seconds: number): void {
+    this.transport.renderUntil(seconds);
   }
 
   /** Records what leaves the master until `stopRecording`. */
   async startRecording(): Promise<void> {
-    await this.prepare();
-    if (!audible()) throw new Error("Audio ist pausiert");
-    await this.recorder.start(Tone.getDestination());
+    const graph = await this.prepare();
+    if (!audible(this.context) || !(this.context instanceof AudioContext)) throw new Error("Audio ist pausiert");
+    await this.recorder.start(this.context, graph.master.fader.output);
   }
 
   stopRecording(): Promise<Recording> {
@@ -265,9 +280,9 @@ export class TrackerEngine {
   setBreak(active: boolean): void {
     const action = this.performance.setBreak(active, this.playing);
     const filter = this.graph?.master.performance;
-    const now = Tone.immediate();
-    if (action === "rise") filter?.startRise(now, (2 * 240) / this.project.tempo);
-    if (action === "drop") filter?.endRise(now);
+    const at = this.sound ? this.context.currentTime : 0;
+    if (action === "rise") filter?.startRise(at, (2 * 240) / this.project.tempo);
+    if (action === "drop") filter?.endRise(at);
     this.emitPerformance();
   }
 
@@ -286,7 +301,7 @@ export class TrackerEngine {
     this.liveKnobs = knobs;
     if (!knobs) this.touched.clear();
     for (const param of touched) this.touched.add(param);
-    if (knobs) this.graph?.acid303.setKnobs(knobs);
+    if (knobs) this.withSound(() => this.graph?.acid303.setKnobs(knobs));
   }
 
   /** While on, thumb moves in the live view are written into the playing pattern, row by row. */
@@ -305,6 +320,10 @@ export class TrackerEngine {
     if (!this.playing) this.pattern = project.activePattern;
     const graph = this.graph;
     if (!graph) return;
+    this.withSound(() => this.applyGraph(graph, project, knobsChanged));
+  }
+
+  private applyGraph(graph: Graph, project: Project, knobsChanged: boolean): void {
     this.applyTiming();
     graph.master.fader.gain.rampTo(faderGain(project.volume), 0.05);
     if (graph.kitPreset !== project.kit) {
@@ -327,10 +346,12 @@ export class TrackerEngine {
   async preview(lane: Lane, cell: Cell): Promise<void> {
     if (!cell) return;
     const graph = await this.prepare();
-    if (!audible()) return;
-    const time = Tone.now() + 0.02;
-    if (cell.kind === "drum") graph.kit.trigger(cell.voice, time, cell.accent ? 1 : 0.8);
-    else graph.acid303.trigger(this.midi(cell), time, { accent: cell.accent, glide: false, hold: false, seconds: 0.18, velocity: 0.82 });
+    if (!audible(this.context)) return;
+    this.withSound(() => {
+      const time = now() + 0.02;
+      if (cell.kind === "drum") graph.kit.trigger(cell.voice, time, cell.accent ? 1 : 0.8);
+      else graph.acid303.trigger(this.midi(cell), time, { accent: cell.accent, glide: false, hold: false, seconds: 0.18, velocity: 0.82 });
+    });
   }
 
   dispose(): void {
@@ -338,11 +359,14 @@ export class TrackerEngine {
     const graph = this.graph;
     this.graph = null;
     if (!graph) return;
-    graph.kit.dispose();
-    graph.acid303.dispose();
-    graph.drums.nodes.forEach((node) => node.dispose());
-    graph.acid.nodes.forEach((node) => node.dispose());
-    graph.master.nodes.forEach((node) => node.dispose());
+    this.withSound(() => {
+      graph.kit.dispose();
+      graph.acid303.dispose();
+      graph.drums.nodes.forEach((node) => node.dispose());
+      graph.acid.nodes.forEach((node) => node.dispose());
+      graph.master.nodes.forEach((node) => node.dispose());
+    });
+    this.transport.dispose();
   }
 
   /** Unlocks audio (call from a tap) and builds the graph once. */
@@ -350,26 +374,31 @@ export class TrackerEngine {
     // Still inside the tap: on an iPhone, keep the silent switch from muting the music.
     if (this.options.latencyHint) playThroughSilentSwitch();
     if (this.options.latencyHint && !this.ownContext) {
-      this.ownContext = new Tone.Context({ latencyHint: this.options.latencyHint });
-      // Importing Tone already made a default context; it never started and is closed here.
-      Tone.setContext(this.ownContext, true);
+      const context = new AudioContext({ latencyHint: this.options.latencyHint });
+      this.ownContext = context;
+      // The live context stays current, as Tone's global one; offline renders swap in theirs for a while.
+      useContext(context);
+      this.sound = currentSound();
+      this.cues = new Cues(() => context.currentTime);
       // A call or another app can take the sound away. The clock would stand
       // still while Play still showed "playing"; stop cleanly and say so instead.
-      (this.ownContext.rawContext as AudioContext).addEventListener("statechange", () => {
-        if (this.playing && this.ownContext?.state !== "running") {
+      context.addEventListener("statechange", () => {
+        if (this.playing && context.state !== "running") {
           this.stop();
           this.emitStatus("interrupted");
         }
       });
     }
-    await Tone.start();
+    // Without its own context the engine plays in the current one (an offline render or a test).
+    this.sound ??= currentSound();
+    if (this.ownContext && this.ownContext.state !== "running") await this.ownContext.resume().catch(() => undefined);
     if (this.graph) return this.graph;
-    this.graphReady ??= this.createGraph().finally(() => { this.graphReady = null; });
+    this.graphReady ??= this.withSound(() => this.createGraph()).finally(() => { this.graphReady = null; });
     return this.graphReady;
   }
 
   private async createGraph(): Promise<Graph> {
-    const master = createMasterGraph(Tone.getDestination(), this.project.volume);
+    const master = createMasterGraph(this.context.destination, this.project.volume);
     const drums = createTrackGraph("drums", this.project.kit, DRUM_MACROS, STRIP_GAINS.drums, master.input);
     const acid = createTrackGraph("acid", this.project.acidVoice, acidMacros(this.project.knobs), STRIP_GAINS.acid, master.input);
     await Promise.all([drums.ready, acid.ready]);
@@ -395,7 +424,7 @@ export class TrackerEngine {
    * is heard, not when it is computed.
    */
   private outputDelay(): number {
-    const raw = Tone.getContext().rawContext as Partial<AudioContext>;
+    const raw = this.context as Partial<AudioContext>;
     const latency = (raw.outputLatency || raw.baseLatency || 0);
     return Number.isFinite(latency) ? Math.max(0, Math.min(0.5, latency)) : 0;
   }
@@ -412,23 +441,45 @@ export class TrackerEngine {
     return { mode: this.mode, song: this.project.song, songStart: this.songStart };
   }
 
+  /** The context this engine plays in. */
+  private get context(): BaseAudioContext {
+    if (!this.sound) throw new Error("prepare() first");
+    return this.sound.context;
+  }
+
+  /** Runs `action` with this engine's context current, as Tone's global context was. */
+  private withSound<T>(action: () => T): T {
+    const previous = swapSound(this.sound);
+    try {
+      return action();
+    } finally {
+      swapSound(previous);
+    }
+  }
+
+  /** Shows `update` when the sound at `time` is heard. */
+  private cue(time: number, update: () => void): void {
+    this.cues?.at(time + this.outputDelay(), update);
+  }
+
   private applyTiming(): void {
-    const transport = Tone.getTransport();
-    transport.bpm.value = this.project.tempo;
-    transport.swing = this.project.swing;
-    transport.swingSubdivision = "16n";
+    setBpm(this.project.tempo);
   }
 
   private tick(time: number): void {
     const graph = this.graph;
     if (!graph) return;
+    if (this.offlineSteps !== null) {
+      if (this.offlineSteps <= 0) return;
+      this.offlineSteps -= 1;
+    }
     const pattern = this.project.patterns[this.pattern];
     if (!pattern) return;
     const row = this.row;
     if (this.step % ROWS_PER_BAR === 0) {
       const { drop, changed } = this.performance.barLine();
       if (drop) graph.master.performance.endRise(time);
-      if (changed) Tone.getDraw().schedule(() => this.emitPerformance(), time + this.outputDelay());
+      if (changed) this.cue(time, () => this.emitPerformance());
     }
     this.step += 1;
     const knobs = this.rideRow(graph, pattern, row, time);
@@ -440,9 +491,9 @@ export class TrackerEngine {
     }
     const current = this.pattern;
     const songIndex = this.songIndex;
-    Tone.getDraw().schedule(() => {
+    this.cue(time, () => {
       for (const listener of this.playheadListeners) listener({ pattern: current, songIndex, row, triggered, knobs });
-    }, time + this.outputDelay());
+    });
     this.row += 1;
     if (this.row >= pattern.rows) {
       this.row = 0;

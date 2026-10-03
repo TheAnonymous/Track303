@@ -1,8 +1,8 @@
-import * as Tone from "tone";
+import { Compressor, Delay, Gain, Limiter, Panner, SoundNode, toSeconds, WaveShaper } from "klangwerk/tone";
 import { PerformanceFilter } from "./performance";
 import { presetDefinition, safeEffectParameters, type SaturationCurve } from "./sound-presets";
 import type { SoundPresetId, TrackKind, TrackMacros } from "./kitty-types";
-import { LeanEq3, LeanFilter, LeanStereoWidener } from "./lean";
+import { LeanEq3, LeanFilter, LeanStereoWidener } from "klangwerk/tone";
 import { faderGain } from "./polish";
 
 export const MASTER_GRAPH_RECIPE = {
@@ -29,11 +29,11 @@ export function saturationGainCompensation(curve: SaturationCurve, amount: numbe
   return 1 / Math.sqrt(1 + safe * strength * 2.1);
 }
 
-export class CharacterSaturator extends Tone.ToneAudioNode {
+export class CharacterSaturator extends SoundNode {
   readonly name = "CharacterSaturator";
-  readonly input = new Tone.Gain(1);
-  readonly output = new Tone.Gain(1);
-  private readonly shaper = new Tone.WaveShaper((value) => saturationSample("body", value), 4096);
+  readonly input = new Gain(1);
+  readonly output = new Gain(1);
+  private readonly shaper = new WaveShaper((value) => saturationSample("body", value), 4096);
   private curve: SaturationCurve = "body";
 
   constructor(curve: SaturationCurve = "body") {
@@ -64,30 +64,30 @@ export class CharacterSaturator extends Tone.ToneAudioNode {
 }
 
 interface DelayTap {
-  delay: Tone.Delay;
-  gain: Tone.Gain;
-  panner: Tone.Panner | null;
+  delay: Delay;
+  gain: Gain;
+  panner: Panner | null;
 }
 
-function createDelayTap(input: Tone.Gain, output: Tone.Gain, seconds: number, gainValue: number, pan: number | null): DelayTap {
-  const delay = new Tone.Delay(seconds, seconds + 0.1);
-  const gain = new Tone.Gain(gainValue);
-  const panner = pan === null ? null : new Tone.Panner(pan);
+function createDelayTap(input: Gain, output: Gain, seconds: number, gainValue: number, pan: number | null): DelayTap {
+  const delay = new Delay(seconds, seconds + 0.1);
+  const gain = new Gain(gainValue);
+  const panner = pan === null ? null : new Panner(pan);
   input.chain(delay, gain);
   if (panner) gain.chain(panner, output);
   else gain.connect(output);
   return { delay, gain, panner };
 }
 
-export class WarehouseDelay extends Tone.ToneAudioNode {
+export class WarehouseDelay extends SoundNode {
   readonly name = "WarehouseDelay";
-  readonly input = new Tone.Gain(1);
-  readonly output = new Tone.Gain(1);
+  readonly input = new Gain(1);
+  readonly output = new Gain(1);
   private readonly taps: DelayTap[];
 
-  constructor(delayTime: Tone.Unit.Time, stereo: boolean, feedback: number) {
+  constructor(delayTime: number | string, stereo: boolean, feedback: number) {
     super();
-    const seconds = Tone.Time(delayTime).toSeconds();
+    const seconds = toSeconds(delayTime);
     const pans = stereo ? [-0.64, 0.64, -0.36, 0.36] : [null, null, null, null];
     this.taps = [1, 2, 3, 4].map((multiple, index) => createDelayTap(this.input, this.output, seconds * multiple, index === 0 ? 0.72 : 0, pans[index]!));
     this.setFeedback(feedback, 0.001);
@@ -106,10 +106,10 @@ export class WarehouseDelay extends Tone.ToneAudioNode {
   }
 }
 
-export class WarehouseReverb extends Tone.ToneAudioNode {
+export class WarehouseReverb extends SoundNode {
   readonly name = "WarehouseReverb";
-  readonly input = new Tone.Gain(1);
-  readonly output = new Tone.Gain(1);
+  readonly input = new Gain(1);
+  readonly output = new Gain(1);
   private readonly taps: DelayTap[];
 
   constructor(decay: number, preDelay: number) {
@@ -132,22 +132,22 @@ export class WarehouseReverb extends Tone.ToneAudioNode {
 }
 
 export interface MasterGraph {
-  input: Tone.Gain;
+  input: Gain;
   performance: PerformanceFilter;
-  fader: Tone.Gain;
-  nodes: Tone.ToneAudioNode[];
+  fader: Gain;
+  nodes: SoundNode[];
 }
 
-export function createMasterGraph(destination: AudioNode | Tone.ToneAudioNode, volume: number, meter?: AudioNode): MasterGraph {
-  const input = new Tone.Gain(1);
+export function createMasterGraph(destination: AudioNode | SoundNode, volume: number, meter?: AudioNode): MasterGraph {
+  const input = new Gain(1);
   const performance = new PerformanceFilter();
   const highpass = new LeanFilter({ type: "highpass", frequency: MASTER_GRAPH_RECIPE.highpass, rolloff: -24 });
   const eq = new LeanEq3(MASTER_GRAPH_RECIPE.eq);
-  const compressor = new Tone.Compressor(MASTER_GRAPH_RECIPE.compressor);
+  const compressor = new Compressor(MASTER_GRAPH_RECIPE.compressor);
   const clipper = new CharacterSaturator(MASTER_GRAPH_RECIPE.saturation.curve);
   clipper.setAmount(MASTER_GRAPH_RECIPE.saturation.amount, 0.001);
-  const limiter = new Tone.Limiter(MASTER_GRAPH_RECIPE.limiterDb);
-  const fader = new Tone.Gain(faderGain(volume));
+  const limiter = new Limiter(MASTER_GRAPH_RECIPE.limiterDb);
+  const fader = new Gain(faderGain(volume));
   input.chain(performance, highpass, eq, compressor, clipper, limiter, fader);
   if (meter) fader.chain(meter, destination);
   else fader.connect(destination);
@@ -157,27 +157,27 @@ export function createMasterGraph(destination: AudioNode | Tone.ToneAudioNode, v
 export interface TrackGraph {
   baseVolume: number;
   outputTrimGain: number;
-  input: Tone.Gain;
+  input: Gain;
   highpass: LeanFilter;
   eq: LeanEq3;
   filter: LeanFilter;
   saturator: CharacterSaturator;
-  compressor: Tone.Compressor;
-  dry: Tone.Gain;
-  delaySend: Tone.Gain;
+  compressor: Compressor;
+  dry: Gain;
+  delaySend: Gain;
   delay: WarehouseDelay;
   delayHighpass: LeanFilter;
   delayLowpass: LeanFilter;
-  reverbSend: Tone.Gain;
+  reverbSend: Gain;
   reverb: WarehouseReverb;
   reverbHighpass: LeanFilter;
   reverbLowpass: LeanFilter;
-  sum: Tone.Gain;
+  sum: Gain;
   widener: LeanStereoWidener | null;
-  duck: Tone.Gain;
-  gain: Tone.Gain;
+  duck: Gain;
+  gain: Gain;
   ready: Promise<void>;
-  nodes: Tone.ToneAudioNode[];
+  nodes: SoundNode[];
 }
 
 const DELAY_TIMES: Record<TrackKind, string> = { drums: "16n", acid: "8n", stab: "8n.", rave: "8n", texture: "4n" };
@@ -194,12 +194,12 @@ export function createTrackGraph(
   preset: SoundPresetId,
   macros: TrackMacros,
   volume: number,
-  destination: AudioNode | Tone.ToneAudioNode,
+  destination: AudioNode | SoundNode,
   meter?: AudioNode,
 ): TrackGraph {
   const channel = presetDefinition(track, preset).channel;
   const parameters = safeEffectParameters(track, preset, macros);
-  const input = new Tone.Gain(dbToGain(channel.inputTrimDb));
+  const input = new Gain(dbToGain(channel.inputTrimDb));
   const highpass = new LeanFilter({ type: "highpass", frequency: channel.highpass, rolloff: -24 });
   const eq = new LeanEq3(channel.eq);
   const filter = new LeanFilter({
@@ -211,20 +211,20 @@ export function createTrackGraph(
   });
   const saturator = new CharacterSaturator(channel.saturationCurve);
   saturator.setAmount(parameters.saturation, 0.001);
-  const compressor = new Tone.Compressor({ threshold: parameters.threshold, ratio: parameters.ratio, ...channel.compressor });
-  const dry = new Tone.Gain(1);
-  const delaySend = new Tone.Gain(parameters.delayWet);
+  const compressor = new Compressor({ threshold: parameters.threshold, ratio: parameters.ratio, ...channel.compressor });
+  const dry = new Gain(1);
+  const delaySend = new Gain(parameters.delayWet);
   const delay = new WarehouseDelay(DELAY_TIMES[track], channel.delayReturn.stereo, parameters.feedback);
   const delayHighpass = new LeanFilter({ type: "highpass", frequency: channel.delayReturn.highpass, rolloff: -24 });
   const delayLowpass = new LeanFilter({ type: "lowpass", frequency: channel.delayReturn.lowpass, rolloff: -12 });
-  const reverbSend = new Tone.Gain(parameters.reverbWet);
+  const reverbSend = new Gain(parameters.reverbWet);
   const reverb = new WarehouseReverb(REVERBS[track].decay, REVERBS[track].preDelay);
   const reverbHighpass = new LeanFilter({ type: "highpass", frequency: channel.reverbReturn.highpass, rolloff: -24 });
   const reverbLowpass = new LeanFilter({ type: "lowpass", frequency: channel.reverbReturn.lowpass, rolloff: -12 });
-  const sum = new Tone.Gain(1);
+  const sum = new Gain(1);
   const widener = track === "drums" || track === "acid" ? null : new LeanStereoWidener(channel.stereo.base + normalized(macros.motion) * channel.stereo.motion);
-  const duck = new Tone.Gain(1);
-  const gain = new Tone.Gain(volume * dbToGain(channel.outputTrimDb));
+  const duck = new Gain(1);
+  const gain = new Gain(volume * dbToGain(channel.outputTrimDb));
 
   input.chain(highpass, eq, filter, saturator, compressor);
   compressor.connect(dry);
@@ -238,7 +238,7 @@ export function createTrackGraph(
   if (meter) gain.chain(meter, destination);
   else gain.connect(destination);
 
-  const nodes: Tone.ToneAudioNode[] = [
+  const nodes: SoundNode[] = [
     input, highpass, eq, filter, saturator, compressor, dry, delaySend, delay, delayHighpass, delayLowpass,
     reverbSend, reverb, reverbHighpass, reverbLowpass, sum, duck, gain,
   ];
